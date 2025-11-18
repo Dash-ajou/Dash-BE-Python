@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # ==================================
+  # Auth Service (Hot-Reload)
+  # ==================================
+  auth:
+    build:
+      context: . # Monorepo 루트
+      dockerfile: services/auth/Dockerfile
+    ports:
+      - "8001:8000" # 로컬 8001 -> auth 컨테이너 8000
+    env_file:
+      - ./.env # 루트의 .env 파일 사용
+    volumes:
+      # 로컬의 app 코드를 컨테이너의 app 코드에 덮어쓰기 (마운트)
+      # 이렇게 해야 Hot-Reload가 가능합니다.
+      - ./services/auth/app:/home/appuser/app
+    # Dockerfile의 CMD를 덮어쓰고, 개발용 --reload 옵션을 추가합니다.
+    # Gunicorn 1개 워커로 --reload를 실행합니다.
+    command: >
+      sh -c "gunicorn -k uvicorn.workers.UvicornWorker -w 1 --reload -b 0.0.0.0:8000 app.main:app"
+  
+  # ==================================
+  # Auth Service (Hot-Reload)
+  # ==================================
+  db:
+    image: mysql:lts
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=roottest123
