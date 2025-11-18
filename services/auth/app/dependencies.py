@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from services.auth.app.core.JoinService import JoinService
 from services.auth.app.core.LoginService import LoginService
 from services.auth.app.core.PhoneService import PhoneService
 from services.auth.app.db.repositories.accounts import (
@@ -63,5 +64,17 @@ def get_login_service() -> LoginService:
         partner_pin_repository=_partner_pin_repository(),
         refresh_store=_refresh_store(),
         phone_service=get_phone_service(),
+    )
+
+
+@lru_cache
+def get_join_service() -> JoinService:
+    return JoinService(
+        member_repository=_member_repository(),
+        member_create=_member_repository(),  # SQLAlchemyMemberRepository가 MemberCreatePort를 구현
+        partner_repository=_partner_repository(),
+        partner_create=_partner_repository(),  # SQLAlchemyPartnerRepository가 PartnerCreatePort를 구현
+        phone_service=get_phone_service(),
+        login_service=get_login_service(),
     )
 

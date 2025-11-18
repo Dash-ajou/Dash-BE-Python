@@ -49,7 +49,7 @@ def _clear_auth_cookies(response: Response) -> None:
             secure=settings.cookie_secure,  # 환경 변수에 따라 자동 설정
             samesite="lax",
         )
-        response.headers.add("clear-cookie", cookie_name)
+        response.headers["clear-cookie"] = cookie_name
 
 
 def _clear_login_request_cookie(response: Response) -> None:
@@ -59,7 +59,7 @@ def _clear_login_request_cookie(response: Response) -> None:
         secure=settings.cookie_secure,  # 환경 변수에 따라 자동 설정
         samesite="lax",
     )
-    response.headers.add("clear-cookie", "LOGIN-REQUEST-HASH")
+    response.headers["clear-cookie"] = "LOGIN-REQUEST-HASH"
 
 @router.post("/login/phone", response_model=LoginResponse)
 async def login_member_with_phone(
