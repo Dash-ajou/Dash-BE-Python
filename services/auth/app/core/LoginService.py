@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Protocol
 
-from libs.schemas import Member
+from libs.schemas import Member, PartnerUser
 
 from app.core.PhoneService import PhoneService, PhoneVerificationError, get_phone_service
 
@@ -23,9 +23,33 @@ class NullMemberRepository(MemberRepositoryPort):
         return None
 
 
+class PartnerRepositoryPort(Protocol):
+    async def find_partner_by_phone(self, phone: str) -> PartnerUser | None: ...
+
+    async def find_partner_by_id(self, partner_id: int) -> PartnerUser | None: ...
+
+
+class PartnerPinRepositoryPort(Protocol):
+    async def find_partner_id_by_pin_hash(self, pin_hash: str) -> int | None: ...
+
+
+class NullPartnerRepository(PartnerRepositoryPort):
+    async def find_partner_by_phone(self, phone: str) -> PartnerUser | None:
+        return None
+
+    async def find_partner_by_id(self, partner_id: int) -> PartnerUser | None:
+        return None
+
+
+class NullPartnerPinRepository(PartnerPinRepositoryPort):
+    async def find_partner_id_by_pin_hash(self, pin_hash: str) -> int | None:
+        return None
+
+
 @dataclass
 class RefreshTokenEntry:
-    member_id: int
+    subject_type: str
+    subject_id: int
     token: str
     expires_at: datetime
 
@@ -35,29 +59,32 @@ class RefreshTokenStorePort(Protocol):
 
     async def consume_token(self, token: str) -> RefreshTokenEntry | None: ...
 
-    async def revoke_member_tokens(self, member_id: int) -> None: ...
+    async def revoke_subject_tokens(self, subject_type: str, subject_id: int) -> None: ...
 
 
 class InMemoryRefreshTokenStore(RefreshTokenStorePort):
     def __init__(self):
         self._tokens: Dict[str, RefreshTokenEntry] = {}
-        self._member_index: Dict[int, set[str]] = {}
+        self._subject_index: Dict[tuple[str, int], set[str]] = {}
 
     async def save_token(self, entry: RefreshTokenEntry) -> None:
-        member_tokens = self._member_index.setdefault(entry.member_id, set())
-        member_tokens.add(entry.token)
+        key = (entry.subject_type, entry.subject_id)
+        subject_tokens = self._subject_index.setdefault(key, set())
+        subject_tokens.add(entry.token)
         self._tokens[entry.token] = entry
 
     async def consume_token(self, token: str) -> RefreshTokenEntry | None:
         entry = self._tokens.pop(token, None)
         if entry:
-            member_tokens = self._member_index.get(entry.member_id)
-            if member_tokens and token in member_tokens:
-                member_tokens.remove(token)
+            key = (entry.subject_type, entry.subject_id)
+            subject_tokens = self._subject_index.get(key)
+            if subject_tokens and token in subject_tokens:
+                subject_tokens.remove(token)
         return entry
 
-    async def revoke_member_tokens(self, member_id: int) -> None:
-        tokens = self._member_index.pop(member_id, set())
+    async def revoke_subject_tokens(self, subject_type: str, subject_id: int) -> None:
+        key = (subject_type, subject_id)
+        tokens = self._subject_index.pop(key, set())
         for token in tokens:
             self._tokens.pop(token, None)
 
@@ -78,14 +105,20 @@ class LoginError(Exception):
 class LoginService:
     ACCESS_TOKEN_TTL = timedelta(minutes=30)
     REFRESH_TOKEN_TTL = timedelta(days=7)
+    SUBJECT_MEMBER = "member"
+    SUBJECT_PARTNER = "partner"
 
     def __init__(
         self,
         member_repository: MemberRepositoryPort | None = None,
+        partner_repository: PartnerRepositoryPort | None = None,
+        partner_pin_repository: PartnerPinRepositoryPort | None = None,
         refresh_store: RefreshTokenStorePort | None = None,
         phone_service: PhoneService | None = None,
     ):
         self.member_repository = member_repository or NullMemberRepository()
+        self.partner_repository = partner_repository or NullPartnerRepository()
+        self.partner_pin_repository = partner_pin_repository or NullPartnerPinRepository()
         self.refresh_store = refresh_store or InMemoryRefreshTokenStore()
         self.phone_service = phone_service or get_phone_service()
 
@@ -101,9 +134,32 @@ class LoginService:
                 raise LoginError("ERR-IVD-PARAM", "등록되지 않은 회원입니다.")
             member_id = member.memberId
         else:
-            member_id = await self._consume_refresh_token(refresh_token)
+            member_id = await self._consume_refresh_token(
+                refresh_token, self.SUBJECT_MEMBER
+            )
 
-        return await self._issue_tokens(member_id)
+        return await self._issue_tokens(member_id, self.SUBJECT_MEMBER)
+
+    async def login_partner(
+        self,
+        phone_auth_token: str | None,
+        pin_hash: str | None,
+        refresh_token: str | None,
+    ) -> LoginTokens:
+        if phone_auth_token:
+            phone = await self._consume_phone_token(phone_auth_token)
+            partner = await self.partner_repository.find_partner_by_phone(phone)
+            if partner is None:
+                raise LoginError("ERR-IVD-PARAM", "등록되지 않은 파트너입니다.")
+            partner_id = partner.partnerId
+        elif pin_hash:
+            partner_id = await self._verify_partner_pin(pin_hash)
+        else:
+            partner_id = await self._consume_refresh_token(
+                refresh_token, self.SUBJECT_PARTNER
+            )
+
+        return await self._issue_tokens(partner_id, self.SUBJECT_PARTNER)
 
     async def _consume_phone_token(self, phone_auth_token: str) -> str:
         try:
@@ -111,7 +167,11 @@ class LoginService:
         except PhoneVerificationError as exc:
             raise LoginError(exc.code, str(exc)) from exc
 
-    async def _consume_refresh_token(self, refresh_token: str | None) -> int:
+    async def _consume_refresh_token(
+        self,
+        refresh_token: str | None,
+        subject_type: str,
+    ) -> int:
         if not refresh_token:
             raise LoginError("ERR-IVD-PARAM", "refresh token이 필요합니다.")
 
@@ -119,21 +179,25 @@ class LoginService:
         if entry is None:
             raise LoginError("ERR-IVD-PARAM", "refresh token이 유효하지 않습니다.")
 
+        if entry.subject_type != subject_type:
+            raise LoginError("ERR-IVD-PARAM", "refresh token 대상이 일치하지 않습니다.")
+
         if entry.expires_at < datetime.now(timezone.utc):
             raise LoginError("ERR-IVD-PARAM", "refresh token이 만료되었습니다.")
 
-        return entry.member_id
+        return entry.subject_id
 
-    async def _issue_tokens(self, member_id: int) -> LoginTokens:
-        await self.refresh_store.revoke_member_tokens(member_id)
+    async def _issue_tokens(self, subject_id: int, subject_type: str) -> LoginTokens:
+        await self.refresh_store.revoke_subject_tokens(subject_type, subject_id)
         now = datetime.now(timezone.utc)
-        access_token = self._generate_access_token(member_id, now)
-        refresh_token = self._generate_refresh_token(member_id, now)
+        access_token = self._generate_access_token(subject_type, subject_id, now)
+        refresh_token = self._generate_refresh_token(subject_type, subject_id, now)
         refresh_expires_at = now + self.REFRESH_TOKEN_TTL
 
         await self.refresh_store.save_token(
             RefreshTokenEntry(
-                member_id=member_id,
+                subject_type=subject_type,
+                subject_id=subject_id,
                 token=refresh_token,
                 expires_at=refresh_expires_at,
             )
@@ -145,13 +209,39 @@ class LoginService:
             refresh_expires_at=refresh_expires_at,
         )
 
-    def _generate_access_token(self, member_id: int, issued_at: datetime) -> str:
-        payload = f"access:{member_id}:{issued_at.isoformat()}:{secrets.token_urlsafe(16)}"
+    def _generate_access_token(
+        self,
+        subject_type: str,
+        subject_id: int,
+        issued_at: datetime,
+    ) -> str:
+        payload = (
+            f"access:{subject_type}:{subject_id}:{issued_at.isoformat()}:"
+            f"{secrets.token_urlsafe(16)}"
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def _generate_refresh_token(self, member_id: int, issued_at: datetime) -> str:
-        payload = f"refresh:{member_id}:{issued_at.isoformat()}:{secrets.token_urlsafe(32)}"
+    def _generate_refresh_token(
+        self,
+        subject_type: str,
+        subject_id: int,
+        issued_at: datetime,
+    ) -> str:
+        payload = (
+            f"refresh:{subject_type}:{subject_id}:{issued_at.isoformat()}:"
+            f"{secrets.token_urlsafe(32)}"
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    async def _verify_partner_pin(self, pin_hash: str | None) -> int:
+        if not pin_hash:
+            raise LoginError("ERR-IVD-PARAM", "PIN 정보가 필요합니다.")
+        partner_id = await self.partner_pin_repository.find_partner_id_by_pin_hash(
+            pin_hash
+        )
+        if partner_id is None:
+            raise LoginError("ERR-IVD-PARAM", "PIN 이 유효하지 않습니다.")
+        return partner_id
 
 
 _MEMORY_REFRESH_STORE = InMemoryRefreshTokenStore()
