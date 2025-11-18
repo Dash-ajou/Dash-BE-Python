@@ -13,5 +13,5 @@ class PartnerUser(BaseModel):
     createdAt: datetime = Field(..., description="파트너 생성 일시")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 

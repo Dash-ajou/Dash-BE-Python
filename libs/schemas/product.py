@@ -11,5 +11,5 @@ class Product(BaseModel):
     productName: str = Field(..., description="상품명")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 

@@ -20,5 +20,5 @@ class PartnerPin(BaseModel):
     createdAt: datetime = Field(..., description="PIN 생성 일시")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 

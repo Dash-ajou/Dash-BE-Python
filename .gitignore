@@ -25,3 +25,7 @@ htmlcov/
 
 # scripts
 *.sh
+
+# Database Architecture
+*.sql
+db/volumes/

@@ -13,13 +13,18 @@ services:
     env_file:
       - ./.env # 루트의 .env 파일 사용
     volumes:
-      # 로컬의 app 코드를 컨테이너의 app 코드에 덮어쓰기 (마운트)
-      # 이렇게 해야 Hot-Reload가 가능합니다.
-      - ./services/auth/app:/home/appuser/app
+      # 로컬의 코드를 컨테이너에 마운트하여 Hot-Reload 가능하게 함
+      # libs: 전역 스키마 및 공통 라이브러리
+      - ./libs:/home/appuser/libs
+      # services: 서비스 코드 (import 경로를 위해 필요)
+      - ./services:/home/appuser/services
+    environment:
+      # PYTHONPATH를 루트로 설정하여 libs와 services를 import 가능하게 함
+      - PYTHONPATH=/home/appuser
     # Dockerfile의 CMD를 덮어쓰고, 개발용 --reload 옵션을 추가합니다.
     # Gunicorn 1개 워커로 --reload를 실행합니다.
     command: >
-      sh -c "gunicorn -k uvicorn.workers.UvicornWorker -w 1 --reload -b 0.0.0.0:8000 app.main:app"
+      sh -c "gunicorn -k uvicorn.workers.UvicornWorker -w 1 --reload -b 0.0.0.0:8000 services.auth.app.main:app"
   
   # ==================================
   # Auth Service (Hot-Reload)
@@ -29,3 +34,14 @@ services:
     restart: always
     environment:
       - MYSQL_ROOT_PASSWORD=roottest123
+      - MYSQL_DATABASE=dash_db
+    ports:
+      - "53306:3306"
+    volumes:
+      # MySQL 데이터를 프로젝트 루트의 db/volumes 경로에 저장
+      - ./db/volumes:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

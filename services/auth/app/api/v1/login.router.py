@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Cookie, Depends, HTTPException, Response, status
 
-from app.schemas.request import (
+from services.auth.app.schemas.request import (
     MemberJoinSchema,
     MemberLoginSchema,
     PartnerJoinSchema,
@@ -10,13 +10,14 @@ from app.schemas.request import (
     PhoneRequest,
     PhoneSchema,
 )
-from app.schemas.response import (
-    PhoneRequestResponse,
+from services.auth.app.schemas.response import (
     PhoneVerifyResponse,
     LoginResponse,
     JoinResponse,
 )
-from app.core.LoginService import LoginError, LoginService, get_login_service
+from services.auth.app.core.LoginService import LoginError, LoginService
+from services.auth.app.dependencies import get_login_service
+from services.auth.app.db.connection import settings
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -34,7 +35,7 @@ def _set_refresh_cookie(response: Response, refresh_token: str, expires_at: date
         key="X-REFRESH-TOKEN",
         value=refresh_token,
         httponly=True,
-        secure=True,
+        secure=settings.cookie_secure,  # 환경 변수에 따라 자동 설정
         samesite="lax",
         max_age=max_age,
     )
@@ -45,7 +46,7 @@ def _clear_auth_cookies(response: Response) -> None:
         response.delete_cookie(
             key=cookie_name,
             httponly=True,
-            secure=True,
+            secure=settings.cookie_secure,  # 환경 변수에 따라 자동 설정
             samesite="lax",
         )
         response.headers.add("clear-cookie", cookie_name)
@@ -55,15 +56,15 @@ def _clear_login_request_cookie(response: Response) -> None:
     response.delete_cookie(
         key="LOGIN-REQUEST-HASH",
         httponly=True,
-        secure=True,
+        secure=settings.cookie_secure,  # 환경 변수에 따라 자동 설정
         samesite="lax",
     )
     response.headers.add("clear-cookie", "LOGIN-REQUEST-HASH")
 
 @router.post("/login/phone", response_model=LoginResponse)
 async def login_member_with_phone(
-    payload: MemberLoginSchema | None = Body(default=None),
     response: Response,
+    payload: MemberLoginSchema | None = Body(default=None),
     refresh_token: str | None = Cookie(default=None, alias="X-REFRESH-TOKEN"),
     login_request_hash: str | None = Cookie(default=None, alias="LOGIN-REQUEST-HASH"),
     login_service: LoginService = Depends(get_login_service),
@@ -96,8 +97,8 @@ async def login_member_with_phone(
 
 @router.post("/login/pin", response_model=LoginResponse)
 async def login_partner_with_pin(
-    payload: PartnerLoginSchema | None = Body(default=None),
     response: Response,
+    payload: PartnerLoginSchema | None = Body(default=None),
     refresh_token: str | None = Cookie(default=None, alias="X-REFRESH-TOKEN"),
     login_request_hash: str | None = Cookie(default=None, alias="LOGIN-REQUEST-HASH"),
     login_service: LoginService = Depends(get_login_service),

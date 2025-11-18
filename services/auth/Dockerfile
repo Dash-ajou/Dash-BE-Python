@@ -49,9 +49,11 @@ WORKDIR /home/appuser
 # --chown: 파일 소유자를 'appuser'로 지정
 COPY --from=builder --chown=appuser:appuser /opt/venv /opt/venv
 
-# 'auth' 서비스의 애플리케이션 코드('app/' 폴더)를 복사
-# 이 레이어는 코드가 변경될 때마다 재실행되지만, 앞선 레이어들은 캐시됨
-COPY --chown=appuser:appuser services/auth/app /home/appuser/app
+# Monorepo 루트 구조를 유지하기 위해 필요한 디렉터리들을 복사
+# libs/ 디렉터리: 전역 스키마 및 공통 라이브러리
+COPY --chown=appuser:appuser libs /home/appuser/libs
+# services/ 디렉터리: 서비스 코드 (import 경로를 위해 필요)
+COPY --chown=appuser:appuser services /home/appuser/services
 
 # --- 2-3. 실행 설정 ---
 # 실행 유저를 'appuser'로 변경
@@ -59,6 +61,8 @@ USER appuser
 
 # 생성한 가상환경을 PATH에 추가
 ENV PATH="/opt/venv/bin:$PATH"
+# PYTHONPATH를 루트로 설정하여 libs와 services를 import 가능하게 함
+ENV PYTHONPATH="/home/appuser"
 
 # 컨테이너가 노출할 포트 (Gunicorn에서 사용할 포트와 일치)
 EXPOSE 8000
@@ -68,5 +72,5 @@ EXPOSE 8000
 # -k uvicorn.workers.UvicornWorker: Uvicorn 워커 사용
 # -w 4: 4개의 워커 프로세스 사용 (서버 환경에 맞게 조절)
 # -b 0.0.0.0:8000: 모든 인터페이스의 8000 포트에서 수신
-# app.main:app: 실행할 FastAPI 앱 (app/main.py의 'app' 객체)
-CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-w", "4", "-b", "0.0.0.0:8000", "app.main:app"]
+# services.auth.app.main:app: 실행할 FastAPI 앱 (루트 구조를 유지한 경로)
+CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-w", "4", "-b", "0.0.0.0:8000", "services.auth.app.main:app"]

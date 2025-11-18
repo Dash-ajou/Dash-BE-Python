@@ -15,5 +15,5 @@ class RegisterLog(BaseModel):
     registeredAt: datetime | None = Field(None, description="등록 일시")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 

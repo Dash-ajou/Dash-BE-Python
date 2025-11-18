@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.api.v1.router import router
+from services.auth.app.api.v1.router import router
 
 app = FastAPI(
     title="Auth Service (인증 서비스)",

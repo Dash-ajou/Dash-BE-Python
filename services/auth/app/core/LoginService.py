@@ -6,7 +6,7 @@ from typing import Dict, Protocol
 
 from libs.schemas import Member, PartnerUser
 
-from app.core.PhoneService import PhoneService, PhoneVerificationError, get_phone_service
+from services.auth.app.core.PhoneService import PhoneService, PhoneVerificationError
 
 
 class MemberRepositoryPort(Protocol):
@@ -120,7 +120,7 @@ class LoginService:
         self.partner_repository = partner_repository or NullPartnerRepository()
         self.partner_pin_repository = partner_pin_repository or NullPartnerPinRepository()
         self.refresh_store = refresh_store or InMemoryRefreshTokenStore()
-        self.phone_service = phone_service or get_phone_service()
+        self.phone_service = phone_service or PhoneService()
 
     async def login_member(
         self,
@@ -243,15 +243,4 @@ class LoginService:
             raise LoginError("ERR-IVD-PARAM", "PIN 이 유효하지 않습니다.")
         return partner_id
 
-
-_MEMORY_REFRESH_STORE = InMemoryRefreshTokenStore()
-
-
-def get_login_service(
-    phone_service: PhoneService | None = None,
-) -> LoginService:
-    return LoginService(
-        refresh_store=_MEMORY_REFRESH_STORE,
-        phone_service=phone_service or get_phone_service(),
-    )
 

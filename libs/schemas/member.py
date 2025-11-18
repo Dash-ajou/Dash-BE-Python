@@ -21,5 +21,5 @@ class Member(BaseModel):
     createdAt: datetime = Field(..., description="회원 생성 일시")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 

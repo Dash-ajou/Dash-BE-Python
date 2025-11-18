@@ -1,12 +1,16 @@
+from __future__ import annotations
+
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from libs.schemas.member import Member
-from libs.schemas.partner_user import PartnerUser
-from libs.schemas.product import Product
-from libs.schemas.register_log import RegisterLog
-from libs.schemas.use_log import UseLog
+if TYPE_CHECKING:
+    from libs.schemas.member import Member
+    from libs.schemas.partner_user import PartnerUser
+    from libs.schemas.product import Product
+    from libs.schemas.register_log import RegisterLog
+    from libs.schemas.use_log import UseLog
 
 
 class Coupon(BaseModel):
@@ -41,5 +45,5 @@ class Coupon(BaseModel):
     expiredAt: datetime = Field(..., description="쿠폰 만료 일시")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 

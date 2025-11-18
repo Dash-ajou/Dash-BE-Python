@@ -1,10 +1,10 @@
 from fastapi import APIRouter, HTTPException, status
 
-from app.schemas.request import (
+from services.auth.app.schemas.request import (
     MemberJoinSchema,
     PartnerJoinSchema,
 )
-from app.schemas.response import (
+from services.auth.app.schemas.response import (
     JoinResponse,
 )
 

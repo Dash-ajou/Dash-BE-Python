@@ -22,5 +22,5 @@ class Phone(BaseModel):
     number: str = Field(..., description="전화번호")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 

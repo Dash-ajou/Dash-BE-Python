@@ -29,5 +29,5 @@ class IssueLog(BaseModel):
     partner: PartnerUser | None = Field(None, description="승인 파트너 정보")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 

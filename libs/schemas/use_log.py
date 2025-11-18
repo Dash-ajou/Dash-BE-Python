@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from libs.schemas.coupon import Coupon
+if TYPE_CHECKING:
+    from libs.schemas.coupon import Coupon
 
 
 class UseLog(BaseModel):
@@ -16,5 +20,5 @@ class UseLog(BaseModel):
     usedAt: datetime | None = Field(None, description="사용 일시")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
