@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # 환경 설정
     ENVIRONMENT: str = "development"  # development, production
     DEBUG: bool = True  # 개발 모드 여부
+    
+    # CORS 설정 (쉼표로 구분된 오리진 목록)
+    ALLOWED_ORIGINS: str = ""  # 예: "http://localhost:3000,http://localhost:5173"
 
     class Config:
         # 루트 디렉터리의 .env 파일을 읽도록 경로 수정

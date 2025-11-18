@@ -13,7 +13,7 @@ from services.auth.app.schemas.response import (
 )
 from services.auth.app.db.connection import settings
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+router = APIRouter(tags=["Authentication"])
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str, expires_at: datetime) -> None:

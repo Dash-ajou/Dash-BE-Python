@@ -20,7 +20,7 @@ from services.auth.app.core.PhoneService import PhoneService, PhoneVerificationE
 from services.auth.app.dependencies import get_phone_service
 from services.auth.app.db.connection import settings
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+router = APIRouter(tags=["Authentication"])
 
 
 def _not_implemented(feature_name: str):

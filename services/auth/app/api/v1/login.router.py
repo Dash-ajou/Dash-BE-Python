@@ -19,7 +19,7 @@ from services.auth.app.core.LoginService import LoginError, LoginService
 from services.auth.app.dependencies import get_login_service
 from services.auth.app.db.connection import settings
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+router = APIRouter(tags=["Authentication"])
 
 
 def _not_implemented(feature_name: str):
