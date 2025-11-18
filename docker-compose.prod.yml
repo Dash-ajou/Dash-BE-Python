@@ -1,0 +1,104 @@
+version: '3.8'
+
+# 프로덕션용 Docker Compose 설정
+# 사용법: docker-compose -f docker-compose.prod.yml up -d
+
+services:
+  # ==================================
+  # Auth Service (Production)
+  # ==================================
+  auth:
+    build:
+      context: . # Monorepo 루트
+      dockerfile: services/auth/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./.env.production  # 프로덕션 환경 변수 파일
+    environment:
+      - PYTHONPATH=/home/appuser
+    # 프로덕션에서는 볼륨 마운트 없이 이미지 내부 코드 사용
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - dash-network
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ==================================
+  # MySQL Database (Production)
+  # ==================================
+  db:
+    image: mysql:8.0
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/mysql_root_password
+      - MYSQL_DATABASE=dash_db
+      - MYSQL_USER_FILE=/run/secrets/mysql_user
+      - MYSQL_PASSWORD_FILE=/run/secrets/mysql_password
+    ports:
+      - "3306:3306"  # 프로덕션에서는 외부 노출 제거 권장
+    volumes:
+      # 프로덕션에서는 named volume 또는 외부 스토리지 사용 권장
+      - mysql_data:/var/lib/mysql
+      # 초기 DDL 스크립트 마운트 (선택사항)
+      - ./libs/schemas/ddl.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    secrets:
+      - mysql_root_password
+      - mysql_user
+      - mysql_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - dash-network
+    # 보안: 외부 접근 제한 (필요시)
+    # command: --bind-address=0.0.0.0 --skip-networking=0
+
+  # ==================================
+  # Database Initialization (Optional)
+  # ==================================
+  # db-init:
+  #   image: mysql:8.0
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   volumes:
+  #     - ./libs/schemas/ddl.sql:/ddl.sql:ro
+  #   command: >
+  #     sh -c "
+  #     mysql -h db -u root -p$$MYSQL_ROOT_PASSWORD dash_db < /ddl.sql
+  #     "
+  #   environment:
+  #     - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/mysql_root_password
+  #   secrets:
+  #     - mysql_root_password
+  #   networks:
+  #     - dash-network
+
+networks:
+  dash-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
+
+secrets:
+  mysql_root_password:
+    file: ./secrets/mysql_root_password.txt
+  mysql_user:
+    file: ./secrets/mysql_user.txt
+  mysql_password:
+    file: ./secrets/mysql_password.txt
+

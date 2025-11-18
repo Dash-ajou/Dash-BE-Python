@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init
+  namespace: dash
+  labels:
+    app: db-init
+spec:
+  template:
+    spec:
+      containers:
+      - name: mysql-client
+        image: mysql:8.0
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "Waiting for MySQL to be ready..."
+          until mysql -h mysql-service -u root -p$MYSQL_ROOT_PASSWORD -e "SELECT 1" > /dev/null 2>&1; do
+            echo "MySQL is not ready yet. Waiting..."
+            sleep 5
+          done
+          
+          echo "MySQL is ready. Initializing database schema..."
+          
+          # 데이터베이스가 없으면 생성
+          mysql -h mysql-service -u root -p$MYSQL_ROOT_PASSWORD <<EOF
+          CREATE DATABASE IF NOT EXISTS dash_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+          USE dash_db;
+          EOF
+          
+          # DDL 스크립트 실행
+          if [ -f /ddl/ddl.sql ]; then
+            echo "Executing DDL script..."
+            mysql -h mysql-service -u root -p$MYSQL_ROOT_PASSWORD dash_db < /ddl/ddl.sql
+            echo "DDL script executed successfully."
+          else
+            echo "Warning: DDL script not found at /ddl/ddl.sql"
+          fi
+          
+          echo "Database initialization completed."
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secrets
+              key: root-password
+        volumeMounts:
+        - name: ddl-script
+          mountPath: /ddl
+          readOnly: true
+      volumes:
+      - name: ddl-script
+        configMap:
+          name: db-ddl
+      restartPolicy: OnFailure
+  backoffLimit: 3  # 실패 시 최대 3번 재시도
+

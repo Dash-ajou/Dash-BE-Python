@@ -1,0 +1,20 @@
+# DDL 스크립트를 ConfigMap으로 생성하는 방법:
+# kubectl create configmap db-ddl \
+#   --from-file=ddl.sql=libs/schemas/ddl.sql \
+#   --namespace=dash
+#
+# 또는 이 파일을 직접 사용하려면:
+# kubectl apply -f k8s/db-ddl-configmap.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-ddl
+  namespace: dash
+data:
+  # 실제 DDL 스크립트 내용을 여기에 넣거나
+  # --from-file 옵션으로 파일을 직접 로드하세요
+  ddl.sql: |
+    # libs/schemas/ddl.sql 파일의 내용을 여기에 복사하거나
+    # kubectl create configmap --from-file 옵션 사용 권장
+
