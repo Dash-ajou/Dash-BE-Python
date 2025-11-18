@@ -2,16 +2,9 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.schemas.request import (
     MemberJoinSchema,
-    MemberLoginSchema,
     PartnerJoinSchema,
-    PartnerLoginSchema,
-    PhoneRequest,
-    PhoneSchema,
 )
 from app.schemas.response import (
-    PhoneRequestResponse,
-    PhoneVerifyResponse,
-    LoginResponse,
     JoinResponse,
 )
 
