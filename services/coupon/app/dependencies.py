@@ -1,10 +1,17 @@
 from functools import lru_cache
 
-# 쿠폰 서비스의 의존성 주입 설정
-# 향후 Repository, Service 등을 여기에 추가할 수 있습니다
+from services.coupon.app.core.CouponService import CouponService
+from services.coupon.app.db.repositories.coupons import SQLAlchemyCouponRepository
 
-# 예시:
-# @lru_cache
-# def get_coupon_repository() -> SQLAlchemyCouponRepository:
-#     return SQLAlchemyCouponRepository()
+
+@lru_cache
+def get_coupon_repository() -> SQLAlchemyCouponRepository:
+    """쿠폰 Repository 의존성"""
+    return SQLAlchemyCouponRepository()
+
+
+@lru_cache
+def get_coupon_service() -> CouponService:
+    """쿠폰 서비스 의존성"""
+    return CouponService(coupon_repository=get_coupon_repository())
 
