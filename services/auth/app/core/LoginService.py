@@ -23,6 +23,8 @@ class MemberRepositoryPort(Protocol):
     async def update_groups(self, member_id: int, group_ids: list[str]) -> None: ...
     
     async def validate_group_ids(self, group_ids: list[str]) -> bool: ...
+    
+    async def get_member_with_details(self, member_id: int) -> tuple[Member, str, list[dict]] | None: ...
 
 
 class NullMemberRepository(MemberRepositoryPort):
@@ -40,6 +42,9 @@ class NullMemberRepository(MemberRepositoryPort):
     
     async def validate_group_ids(self, group_ids: list[str]) -> bool:
         return True
+    
+    async def get_member_with_details(self, member_id: int) -> tuple[Member, str, list[dict]] | None:
+        return None
 
 
 class PartnerRepositoryPort(Protocol):
@@ -48,6 +53,12 @@ class PartnerRepositoryPort(Protocol):
     async def find_partner_by_id(self, partner_id: int) -> PartnerUser | None: ...
     
     async def update_phone(self, account_id: int, new_phone: str) -> None: ...
+    
+    async def get_partner_phone(self, partner_id: int) -> str | None: ...
+    
+    async def update_pin(self, partner_id: int, encrypted_pin_hash: str) -> None: ...
+    
+    async def get_partner_phones(self, partner_id: int) -> list[str]: ...
 
 
 class PartnerPinRepositoryPort(Protocol):
@@ -413,6 +424,157 @@ class LoginService:
 
         # 4. 소속정보 업데이트 (기존 그룹 삭제 후 새로 추가)
         await self.member_repository.update_groups(subject_id, group_ids)
+
+    async def update_pin(
+        self,
+        access_token: str,
+        prev_pin_hash: str,
+        new_pin_hash: str,
+    ) -> LoginTokens:
+        """
+        파트너 계정의 PIN을 업데이트합니다.
+        개인사용자는 이 메서드를 사용할 수 없습니다.
+        
+        Args:
+            access_token: 액세스 토큰
+            prev_pin_hash: 현재 PIN 해시 (SHA-256)
+            new_pin_hash: 새로운 PIN 해시 (SHA-256)
+            
+        Returns:
+            새로 발급된 토큰
+            
+        Raises:
+            LoginError: 토큰이 유효하지 않거나, 개인사용자 계정이거나, PIN이 일치하지 않는 경우
+        """
+        # 1. Access token 검증
+        subject_type, subject_id = await self.verify_access_token(access_token)
+
+        # 2. 파트너(PARTNER)만 허용
+        if subject_type != self.SUBJECT_PARTNER:
+            raise LoginError("ERR-IVD-PARAM", "이 메서드는 파트너만 사용할 수 있습니다.")
+
+        # 3. 파트너 정보 조회 (전화번호 필요)
+        partner = await self.partner_repository.find_partner_by_id(subject_id)
+        if partner is None:
+            raise LoginError("ERR-IVD-PARAM", "등록되지 않은 파트너입니다.")
+
+        # 4. 파트너 전화번호 조회
+        phone = await self.partner_repository.get_partner_phone(subject_id)
+        if not phone:
+            raise LoginError("ERR-IVD-PARAM", "파트너 전화번호를 찾을 수 없습니다.")
+
+        # 5. 현재 PIN 검증 (prev_pin_hash를 phone으로 암호화하여 비교)
+        encrypted_prev_pin = self._encrypt_pin_with_phone(prev_pin_hash, phone)
+        verified_partner_id = await self._verify_partner_pin(encrypted_prev_pin)
+        if verified_partner_id != subject_id:
+            raise LoginError("ERR-IVD-VALUE", "현재 PIN이 일치하지 않습니다.")
+
+        # 6. 새로운 PIN 암호화 및 업데이트
+        encrypted_new_pin = self._encrypt_pin_with_phone(new_pin_hash, phone)
+        await self.partner_repository.update_pin(subject_id, encrypted_new_pin)
+
+        # 7. 새 토큰 발급
+        return await self._issue_tokens(subject_id, subject_type, partner.partnerName)
+
+    async def get_current_user_info(
+        self,
+        access_token: str,
+    ) -> dict:
+        """
+        현재 로그인된 사용자 정보를 조회합니다.
+        
+        Args:
+            access_token: 액세스 토큰
+            
+        Returns:
+            개인회원 또는 파트너회원 정보 딕셔너리
+            
+        Raises:
+            LoginError: 토큰이 유효하지 않은 경우
+        """
+        # 1. Access token 검증
+        subject_type, subject_id = await self.verify_access_token(access_token)
+
+        if subject_type == self.SUBJECT_MEMBER:
+            # 개인회원 정보 조회
+            result = await self.member_repository.get_member_with_details(subject_id)
+            if result is None:
+                raise LoginError("ERR-IVD-PARAM", "등록되지 않은 회원입니다.")
+            
+            member, phone, groups = result
+            
+            # 전화번호 포맷팅 (010-1234-1234)
+            formatted_phone = self._format_phone_number(phone)
+            
+            # 그룹 정보 변환
+            group_items = [
+                {"groupId": g["groupId"], "groupName": g["groupName"]}
+                for g in groups
+            ]
+            
+            # 날짜 포맷팅 (YYYY-MM-DD HH:MM:SS)
+            created_at_str = member.createdAt.strftime("%Y-%m-%d %H:%M:%S") if member.createdAt else ""
+            
+            return {
+                "memberId": member.memberId,
+                "memberName": member.memberName,
+                "memberBirth": member.memberBirth,
+                "number": formatted_phone,
+                "groups": group_items,
+                "createdAt": created_at_str,
+            }
+        elif subject_type == self.SUBJECT_PARTNER:
+            # 파트너회원 정보 조회
+            partner = await self.partner_repository.find_partner_by_id(subject_id)
+            if partner is None:
+                raise LoginError("ERR-IVD-PARAM", "등록되지 않은 파트너입니다.")
+            
+            # 전화번호 목록 조회
+            phones = await self.partner_repository.get_partner_phones(subject_id)
+            
+            # 전화번호 포맷팅 (010-1234-1234)
+            formatted_phones = [self._format_phone_number(phone) for phone in phones]
+            
+            # 날짜 포맷팅 (YYYY-MM-DD HH:MM:SS)
+            created_at_str = partner.createdAt.strftime("%Y-%m-%d %H:%M:%S") if partner.createdAt else ""
+            
+            return {
+                "partnerId": partner.partnerId,
+                "partnerName": partner.partnerName,
+                "numbers": formatted_phones,
+                "createdAt": created_at_str,
+            }
+        else:
+            raise LoginError("ERR-IVD-PARAM", "알 수 없는 사용자 타입입니다.")
+
+    @staticmethod
+    def _format_phone_number(phone: str) -> str:
+        """
+        전화번호를 010-1234-1234 형식으로 포맷팅합니다.
+        
+        Args:
+            phone: 숫자만 포함된 전화번호 (예: "01012341234")
+            
+        Returns:
+            포맷팅된 전화번호 (예: "010-1234-1234")
+        """
+        if not phone:
+            return ""
+        
+        # 숫자만 추출
+        digits = re.sub(r"\D", "", phone)
+        
+        # 11자리 휴대폰 번호 형식 (010-1234-5678)
+        if len(digits) == 11:
+            return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+        # 10자리 형식 (02-1234-5678)
+        elif len(digits) == 10:
+            if digits.startswith("02"):
+                return f"{digits[:2]}-{digits[2:6]}-{digits[6:]}"
+            else:
+                return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+        # 그 외는 그대로 반환
+        return phone
 
     def _generate_access_token(
         self,

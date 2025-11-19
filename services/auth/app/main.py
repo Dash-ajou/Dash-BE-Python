@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from services.auth.app.api.v1.router import router, users_router
+from services.auth.app.api.v1.router import router, users_router, groups_router
 from services.auth.app.db.connection import settings
 
 app = FastAPI(
@@ -44,6 +44,7 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(users_router)
+app.include_router(groups_router)
 
 # 서비스가 살아있는지 확인하는 헬스 체크 엔드포인트
 @app.get("/")

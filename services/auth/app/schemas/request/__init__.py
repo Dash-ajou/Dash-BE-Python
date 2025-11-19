@@ -6,6 +6,8 @@ from .MemberJoinSchema import MemberJoinSchema
 from .PartnerJoinSchema import PartnerJoinSchema
 from .PhoneUpdateSchema import PhoneUpdateSchema
 from .DepartUpdateSchema import DepartUpdateSchema
+from .PinUpdateSchema import PinUpdateSchema
+from .GroupCreateSchema import GroupCreateSchema
 
 __all__ = [
     "PhoneRequest",
@@ -16,5 +18,7 @@ __all__ = [
     "PartnerJoinSchema",
     "PhoneUpdateSchema",
     "DepartUpdateSchema",
+    "PinUpdateSchema",
+    "GroupCreateSchema",
 ]
 

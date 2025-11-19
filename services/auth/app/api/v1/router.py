@@ -7,6 +7,7 @@ from fastapi import APIRouter
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 users_router = APIRouter(tags=["Users"])
+groups_router = APIRouter(tags=["Groups"])
 
 
 def _load_module(module_path: Path) -> Optional[ModuleType]:
@@ -30,8 +31,11 @@ for router_file in v1_dir.glob("*.router.py"):
 
     sub_router = getattr(module, "router", None)
     if isinstance(sub_router, APIRouter):
-        # users.router.py는 별도로 처리
+        # users.router.py와 groups.router.py는 별도로 처리
         if router_file.name == "users.router.py":
             users_router.include_router(sub_router)
+        elif router_file.name == "groups.router.py":
+            # groups.router.py는 별도 router에 포함
+            groups_router.include_router(sub_router)
         else:
             router.include_router(sub_router)

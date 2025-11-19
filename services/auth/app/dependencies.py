@@ -9,6 +9,7 @@ from services.auth.app.db.repositories.accounts import (
     SQLAlchemyPartnerPinRepository,
     SQLAlchemyPartnerRepository,
 )
+from services.auth.app.db.repositories.groups import SQLAlchemyGroupRepository
 from services.auth.app.db.stores.phone import SQLPhoneAuthTokenStore, SQLPhoneVerificationStore
 from services.auth.app.db.stores.refresh_token import SQLRefreshTokenStore
 
@@ -77,4 +78,9 @@ def get_join_service() -> JoinService:
         phone_service=get_phone_service(),
         login_service=get_login_service(),
     )
+
+
+@lru_cache
+def get_group_repository() -> SQLAlchemyGroupRepository:
+    return SQLAlchemyGroupRepository()
 

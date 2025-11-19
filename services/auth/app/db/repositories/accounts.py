@@ -158,6 +158,97 @@ class SQLAlchemyMemberRepository(_SQLRepositoryBase):
 
         return await self._run_in_thread(_query)
 
+    async def get_member_with_details(self, member_id: int) -> tuple[Member, str, list[dict]] | None:
+        """
+        회원 정보와 전화번호, 그룹 정보를 함께 조회합니다.
+        
+        Returns:
+            (Member, phone, groups) 튜플 또는 None
+            groups는 [{"groupId": str, "groupName": str | None}] 형식
+        """
+        def _query():
+            with self._session_factory() as session:
+                # 1. 회원 기본 정보 조회
+                member_row = (
+                    session.execute(
+                        text(
+                            """
+                            SELECT
+                                m.member_id,
+                                m.member_name,
+                                m.member_birth,
+                                m.created_at
+                            FROM members m
+                            WHERE m.member_id = :member_id
+                            LIMIT 1
+                            """
+                        ),
+                        {"member_id": member_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+                if member_row is None:
+                    return None
+
+                # 2. 전화번호 조회
+                phone_row = (
+                    session.execute(
+                        text(
+                            """
+                            SELECT p.number
+                            FROM phones p
+                            WHERE p.contact_account_type = 'MEMBER'
+                              AND p.account_id = :member_id
+                            LIMIT 1
+                            """
+                        ),
+                        {"member_id": member_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+                phone = phone_row["number"] if phone_row else ""
+
+                # 3. 그룹 정보 조회
+                group_rows = (
+                    session.execute(
+                        text(
+                            """
+                            SELECT
+                                g.group_id,
+                                g.group_name
+                            FROM member_groups mg
+                            INNER JOIN `groups` g ON g.group_id = mg.group_id
+                            WHERE mg.member_id = :member_id
+                            ORDER BY g.group_id
+                            """
+                        ),
+                        {"member_id": member_id},
+                    )
+                    .mappings()
+                    .all()
+                )
+                groups = [
+                    {
+                        "groupId": str(row["group_id"]),
+                        "groupName": row["group_name"],
+                    }
+                    for row in group_rows
+                ]
+
+                member = Member(
+                    memberId=member_row["member_id"],
+                    memberName=member_row["member_name"],
+                    memberBirth=_format_date_to_string(member_row["member_birth"]),
+                    groups=[],  # groups는 별도로 반환
+                    createdAt=_ensure_timezone(member_row["created_at"]),
+                )
+
+                return (member, phone, groups)
+
+        return await self._run_in_thread(_query)
+
     async def update_phone(self, account_id: int, new_phone: str) -> None:
         """회원의 전화번호를 업데이트합니다."""
         def _update():
@@ -226,7 +317,7 @@ class SQLAlchemyMemberRepository(_SQLRepositoryBase):
                     text(
                         """
                         SELECT COUNT(*) as count
-                        FROM groups
+                        FROM `groups`
                         WHERE group_id IN :group_ids
                         """
                     ),
@@ -445,6 +536,72 @@ class SQLAlchemyPartnerRepository(_SQLRepositoryBase):
                     partnerName=row["partner_name"],
                     createdAt=_ensure_timezone(row["created_at"]),
                 )
+
+        return await self._run_in_thread(_query)
+
+    async def get_partner_phone(self, partner_id: int) -> str | None:
+        """파트너의 전화번호를 조회합니다."""
+        def _query():
+            with self._session_factory() as session:
+                row = (
+                    session.execute(
+                        text(
+                            """
+                            SELECT p.number
+                            FROM phones p
+                            WHERE p.contact_account_type = 'PARTNER'
+                              AND p.account_id = :partner_id
+                            LIMIT 1
+                            """
+                        ),
+                        {"partner_id": partner_id},
+                    )
+                    .mappings()
+                    .first()
+                )
+                return row["number"] if row else None
+
+        return await self._run_in_thread(_query)
+
+    async def update_pin(self, partner_id: int, encrypted_pin_hash: str) -> None:
+        """파트너의 PIN을 업데이트합니다."""
+        def _update():
+            with self._session_factory() as session:
+                session.execute(
+                    text(
+                        """
+                        UPDATE partner_pins
+                        SET pin = :pin_hash
+                        WHERE partner_id = :partner_id
+                        """
+                    ),
+                    {"pin_hash": encrypted_pin_hash, "partner_id": partner_id},
+                )
+                session.commit()
+
+        return await self._run_in_thread(_update)
+
+    async def get_partner_phones(self, partner_id: int) -> list[str]:
+        """파트너의 모든 전화번호를 조회합니다."""
+        def _query():
+            with self._session_factory() as session:
+                rows = (
+                    session.execute(
+                        text(
+                            """
+                            SELECT p.number
+                            FROM phones p
+                            WHERE p.contact_account_type = 'PARTNER'
+                              AND p.account_id = :partner_id
+                            ORDER BY p.phone_id
+                            """
+                        ),
+                        {"partner_id": partner_id},
+                    )
+                    .mappings()
+                    .all()
+                )
+                return [row["number"] for row in rows]
 
         return await self._run_in_thread(_query)
 
