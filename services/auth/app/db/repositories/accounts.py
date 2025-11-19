@@ -360,7 +360,7 @@ class SQLAlchemyPartnerPinRepository(_SQLRepositoryBase):
                             """
                             SELECT partner_id
                             FROM partner_pins
-                            WHERE pin_hash = :pin_hash
+                            WHERE pin = :pin_hash
                             LIMIT 1
                             """
                         ),

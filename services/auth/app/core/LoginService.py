@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -151,9 +152,20 @@ class LoginService:
             partner = await self.partner_repository.find_partner_by_phone(phone)
             if partner is None:
                 raise LoginError("ERR-IVD-PARAM", "등록되지 않은 파트너입니다.")
+            
+            # PIN 검증이 필요한 경우 (phone_auth_token과 pin_hash가 함께 전달된 경우)
+            if pin_hash:
+                # pin_hash를 phone을 key로 사용하여 암호화 후 검증
+                encrypted_pin_hash = self._encrypt_pin_with_phone(pin_hash, phone)
+                verified_partner_id = await self._verify_partner_pin(encrypted_pin_hash)
+                if verified_partner_id != partner.partnerId:
+                    raise LoginError("ERR-IVD-PARAM", "PIN이 유효하지 않습니다.")
+            
             partner_id = partner.partnerId
         elif pin_hash:
-            partner_id = await self._verify_partner_pin(pin_hash)
+            # phone_auth_token 없이 pin_hash만 있는 경우는 지원하지 않음
+            # (phone 정보가 필요하므로)
+            raise LoginError("ERR-IVD-PARAM", "PIN 검증을 위해서는 휴대폰 인증이 필요합니다.")
         else:
             partner_id = await self._consume_refresh_token(
                 refresh_token, self.SUBJECT_PARTNER
@@ -233,14 +245,40 @@ class LoginService:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    async def _verify_partner_pin(self, pin_hash: str | None) -> int:
-        if not pin_hash:
-            raise LoginError("ERR-IVD-PARAM", "PIN 정보가 필요합니다.")
+    async def _verify_partner_pin(self, encrypted_pin_hash: str) -> int:
+        """
+        암호화된 PIN 해시로 파트너 ID를 검증합니다.
+        
+        Args:
+            encrypted_pin_hash: phone을 key로 암호화된 PIN 해시 값
+            
+        Returns:
+            파트너 ID
+        """
         partner_id = await self.partner_pin_repository.find_partner_id_by_pin_hash(
-            pin_hash
+            encrypted_pin_hash
         )
         if partner_id is None:
-            raise LoginError("ERR-IVD-PARAM", "PIN 이 유효하지 않습니다.")
+            raise LoginError("ERR-IVD-PARAM", "PIN이 유효하지 않습니다.")
         return partner_id
+
+    @staticmethod
+    def _encrypt_pin_with_phone(pin_hash: str, phone: str) -> str:
+        """
+        pin_hash를 phone을 key로 사용하여 단방향 암호화 (HMAC-SHA256)
+        JoinService와 동일한 로직 사용
+        
+        Args:
+            pin_hash: 암호화할 PIN 해시 값
+            phone: 암호화 키로 사용할 전화번호
+            
+        Returns:
+            HMAC-SHA256으로 암호화된 PIN 해시 값 (hex 문자열)
+        """
+        return hmac.new(
+            phone.encode('utf-8'),
+            pin_hash.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
 
 

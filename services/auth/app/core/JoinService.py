@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from typing import Protocol
 
 from services.auth.app.core.LoginService import (
@@ -105,11 +107,14 @@ class JoinService:
         if not self.partner_create:
             raise JoinError("ERR-INTERNAL", "파트너 생성 기능이 설정되지 않았습니다.")
 
+        # pin_hash를 phone을 key로 사용하여 단방향 암호화 (HMAC-SHA256)
+        encrypted_pin_hash = self._encrypt_pin_with_phone(pin_hash, phone)
+
         partner_id = await self.partner_create.create_partner(
             user_name=user_name,
             partner_name=partner_name,
             phone=phone,
-            pin_hash=pin_hash,
+            pin_hash=encrypted_pin_hash,
         )
 
         # 4. AccessToken 및 RefreshToken 발급 (LoginService 사용)
@@ -123,4 +128,22 @@ class JoinService:
             return await self.phone_service.consume_phone_auth_token(phone_auth_token)
         except PhoneVerificationError as exc:
             raise JoinError(exc.code, str(exc)) from exc
+
+    @staticmethod
+    def _encrypt_pin_with_phone(pin_hash: str, phone: str) -> str:
+        """
+        pin_hash를 phone을 key로 사용하여 단방향 암호화 (HMAC-SHA256)
+        
+        Args:
+            pin_hash: 암호화할 PIN 해시 값
+            phone: 암호화 키로 사용할 전화번호
+            
+        Returns:
+            HMAC-SHA256으로 암호화된 PIN 해시 값 (hex 문자열)
+        """
+        return hmac.new(
+            phone.encode('utf-8'),
+            pin_hash.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
 
