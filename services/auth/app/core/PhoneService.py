@@ -3,9 +3,10 @@ import logging
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Callable, Dict, Protocol
 
+from libs.common import now_kst
 from libs.schemas import Member, PartnerUser
 from services.auth.app.db.connection import settings
 
@@ -58,7 +59,7 @@ class InMemoryPhoneVerificationStore(PhoneVerificationStorePort):
 
     async def get_request(self, request_hash: str) -> PhoneVerificationEntry | None:
         entry = self._store.get(request_hash)
-        if entry and entry.expires_at < datetime.now(timezone.utc):
+        if entry and entry.expires_at < now_kst():
             await self.delete_request(request_hash)
             return None
         return entry
@@ -94,7 +95,7 @@ class InMemoryPhoneAuthTokenStore(PhoneAuthTokenStorePort):
 
     async def consume_token(self, token: str) -> PhoneAuthTokenEntry | None:
         entry = self._store.pop(token, None)
-        if entry and entry.expires_at < datetime.now(timezone.utc):
+        if entry and entry.expires_at < now_kst():
             return None
         return entry
 
@@ -156,7 +157,7 @@ class PhoneService:
         if entry is None:
             raise PhoneVerificationError("ERR-REQ-NOT-FOUND", "인증요청 정보가 존재하지 않습니다.")
 
-        if entry.expires_at < datetime.now(timezone.utc):
+        if entry.expires_at < now_kst():
             await self.verification_store.delete_request(login_request_hash)
             raise PhoneVerificationError("ERR-REQ-EXPIRED", "인증요청이 만료되었습니다.")
 
@@ -174,7 +175,7 @@ class PhoneService:
         if entry is None:
             raise PhoneVerificationError("ERR-IVD-PARAM", "휴대폰 인증 토큰이 유효하지 않습니다.")
 
-        if entry.expires_at < datetime.now(timezone.utc):
+        if entry.expires_at < now_kst():
             raise PhoneVerificationError("ERR-PHONE-AUTH-EXPIRED", "휴대폰 인증 토큰이 만료되었습니다.")
 
         return entry.phone
@@ -194,7 +195,7 @@ class PhoneService:
 
     @staticmethod
     def _build_login_request_hash(phone: str) -> tuple[str, datetime]:
-        requested_at = datetime.now(timezone.utc)
+        requested_at = now_kst()
         payload = f"{phone}:{requested_at.isoformat()}"
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return digest, requested_at + timedelta(minutes=5)
@@ -204,9 +205,9 @@ class PhoneService:
         return f"{secrets.randbelow(1_000_000):06d}"
 
     async def _issue_phone_auth_token(self, phone: str) -> str:
-        payload = f"{phone}:{datetime.now(timezone.utc).isoformat()}:{secrets.token_urlsafe(8)}"
+        payload = f"{phone}:{now_kst().isoformat()}:{secrets.token_urlsafe(8)}"
         token = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        expires_at = now_kst() + timedelta(minutes=10)
         await self.phone_auth_store.save_token(
             token,
             PhoneAuthTokenEntry(phone=phone, expires_at=expires_at),

@@ -1,7 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Security, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+from libs.common import now_kst
 
 from services.auth.app.core.LoginService import LoginError, LoginService
 from services.auth.app.dependencies import get_login_service
@@ -19,7 +21,7 @@ security = HTTPBearer(description="Access Token (Bearer)", auto_error=False)
 
 def _set_refresh_cookie(response: Response, refresh_token: str, expires_at: datetime) -> None:
     """RefreshToken을 쿠키에 설정하는 헬퍼 함수"""
-    max_age = max(int((expires_at - datetime.now(timezone.utc)).total_seconds()), 0)
+    max_age = max(int((expires_at - now_kst()).total_seconds()), 0)
     response.set_cookie(
         key="X-REFRESH-TOKEN",
         value=refresh_token,

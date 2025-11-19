@@ -1,9 +1,10 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Callable
 
 from sqlalchemy import text
 
+from libs.common import KST_TIMEZONE, now_kst
 from services.auth.app.core.LoginService import RefreshTokenEntry, RefreshTokenStorePort
 from services.auth.app.db.session import SessionLocal
 
@@ -48,7 +49,7 @@ class SQLRefreshTokenStore(RefreshTokenStorePort):
                         "subject_id": entry.subject_id,
                         "expires_at": entry.expires_at,
                         "access_token": entry.access_token,
-                        "created_at": datetime.now(timezone.utc),
+                        "created_at": now_kst(),
                     },
                 )
                 session.commit()
@@ -82,7 +83,7 @@ class SQLRefreshTokenStore(RefreshTokenStorePort):
                 session.commit()
                 expires_at = row["expires_at"]
                 if expires_at and expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    expires_at = expires_at.replace(tzinfo=KST_TIMEZONE)
                 return RefreshTokenEntry(
                     subject_type=row["subject_type"],
                     subject_id=row["subject_id"],
@@ -115,7 +116,7 @@ class SQLRefreshTokenStore(RefreshTokenStorePort):
                     return None
                 expires_at = row["expires_at"]
                 if expires_at and expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    expires_at = expires_at.replace(tzinfo=KST_TIMEZONE)
                 return RefreshTokenEntry(
                     subject_type=row["subject_type"],
                     subject_id=row["subject_id"],

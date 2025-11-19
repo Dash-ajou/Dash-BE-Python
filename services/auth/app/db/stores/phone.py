@@ -1,9 +1,10 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Callable
 
 from sqlalchemy import text
 
+from libs.common import KST_TIMEZONE, now_kst
 from services.auth.app.core.PhoneService import (
     PhoneAuthTokenEntry,
     PhoneAuthTokenStorePort,
@@ -53,7 +54,7 @@ class SQLPhoneVerificationStore(_SQLStoreBase, PhoneVerificationStorePort):
                         "phone": entry.phone,
                         "code": entry.code,
                         "expires_at": entry.expires_at,
-                        "created_at": datetime.now(timezone.utc),
+                        "created_at": now_kst(),
                     },
                 )
                 session.commit()
@@ -82,7 +83,7 @@ class SQLPhoneVerificationStore(_SQLStoreBase, PhoneVerificationStorePort):
                     return None
                 expires_at = row["expires_at"]
                 if expires_at and expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    expires_at = expires_at.replace(tzinfo=KST_TIMEZONE)
                 return PhoneVerificationEntry(
                     phone=row["phone"],
                     code=row["code"],
@@ -136,7 +137,7 @@ class SQLPhoneAuthTokenStore(_SQLStoreBase, PhoneAuthTokenStorePort):
                         "token": token,
                         "phone": entry.phone,
                         "expires_at": entry.expires_at,
-                        "created_at": datetime.now(timezone.utc),
+                        "created_at": now_kst(),
                     },
                 )
                 session.commit()
@@ -175,7 +176,7 @@ class SQLPhoneAuthTokenStore(_SQLStoreBase, PhoneAuthTokenStorePort):
                 session.commit()
                 expires_at = row["expires_at"]
                 if expires_at and expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                    expires_at = expires_at.replace(tzinfo=KST_TIMEZONE)
                 return PhoneAuthTokenEntry(
                     phone=row["phone"],
                     expires_at=expires_at,

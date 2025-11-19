@@ -1,6 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Body, Cookie, Depends, HTTPException, Response, status
+
+from libs.common import now_kst
 
 from services.auth.app.schemas.request import (
     MemberJoinSchema,
@@ -30,7 +32,7 @@ def _not_implemented(feature_name: str):
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str, expires_at: datetime) -> None:
-    max_age = max(int((expires_at - datetime.now(timezone.utc)).total_seconds()), 0)
+    max_age = max(int((expires_at - now_kst()).total_seconds()), 0)
     response.set_cookie(
         key="X-REFRESH-TOKEN",
         value=refresh_token,

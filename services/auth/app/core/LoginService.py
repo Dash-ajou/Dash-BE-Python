@@ -2,11 +2,12 @@ import hashlib
 import hmac
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Dict, Protocol
 
 import jwt
 
+from libs.common import now_kst
 from libs.schemas import Member, PartnerUser
 
 from services.auth.app.core.PhoneService import PhoneService, PhoneVerificationError
@@ -299,7 +300,7 @@ class LoginService:
         """
         # JWT 방식으로 변경하여 DB에 저장하지 않음
         # 필요시 revoke를 위한 블랙리스트는 별도로 관리
-        now = datetime.now(timezone.utc)
+        now = now_kst()
         access_token = self._generate_access_token(subject_type, subject_id, now)
         refresh_token = self._generate_refresh_token(subject_type, subject_id, now)
         refresh_expires_at = now + self.REFRESH_TOKEN_TTL

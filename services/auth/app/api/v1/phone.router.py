@@ -1,6 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
+
+from libs.common import now_kst
 
 from services.auth.app.schemas.request import (
     MemberJoinSchema,
@@ -57,7 +59,7 @@ async def request_phone_verification(
             "samesite": "lax",
         }
         if result.hash_expiration:
-            delta = result.hash_expiration - datetime.now(timezone.utc)
+            delta = result.hash_expiration - now_kst()
             cookie_kwargs["max_age"] = max(int(delta.total_seconds()), 0)
 
         response.set_cookie(**cookie_kwargs)

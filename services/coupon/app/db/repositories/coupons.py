@@ -588,14 +588,14 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
         """쿠폰을 회원에게 등록합니다."""
         def _register():
             with self._session_factory() as session:
-                from datetime import datetime, timezone
+                from libs.common import now_kst
                 
                 # register_logs에 등록 로그 생성
                 insert_log_query = text("""
                     INSERT INTO register_logs (register_user_id, registered_at, created_at, updated_at)
                     VALUES (:register_user_id, :registered_at, :created_at, :updated_at)
                 """)
-                now = datetime.now(timezone.utc)
+                now = now_kst()
                 result = session.execute(
                     insert_log_query,
                     {

@@ -1,21 +1,19 @@
 import asyncio
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Callable
 
 from sqlalchemy import text
 
+from libs.common import KST_TIMEZONE, ensure_kst, now_kst
 from libs.schemas import Member, PartnerUser
 
 from services.auth.app.db.session import SessionLocal
 
 
 def _ensure_timezone(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
+    """KST 시간대를 보장하는 함수 (기존 _ensure_timezone과 동일한 역할)"""
+    return ensure_kst(value)
 
 
 def _format_date_to_string(date_value) -> str:
@@ -297,7 +295,7 @@ class SQLAlchemyMemberRepository(_SQLRepositoryBase):
                             {
                                 "member_id": member_id,
                                 "group_id": group_id,
-                                "created_at": datetime.now(timezone.utc),
+                                "created_at": now_kst(),
                             },
                         )
 
@@ -352,7 +350,7 @@ class SQLAlchemyMemberRepository(_SQLRepositoryBase):
                     {
                         "member_name": member_name,
                         "member_birth": normalized_birth,
-                        "created_at": datetime.now(timezone.utc),
+                        "created_at": now_kst(),
                     },
                 )
                 member_id = result.lastrowid
@@ -369,7 +367,7 @@ class SQLAlchemyMemberRepository(_SQLRepositoryBase):
                     {
                         "account_id": member_id,
                         "number": phone,
-                        "created_at": datetime.now(timezone.utc),
+                        "created_at": now_kst(),
                     },
                 )
 
@@ -387,7 +385,7 @@ class SQLAlchemyMemberRepository(_SQLRepositoryBase):
                             {
                                 "member_id": member_id,
                                 "group_id": group_id,
-                                "created_at": datetime.now(timezone.utc),
+                                "created_at": now_kst(),
                             },
                         )
 
@@ -466,7 +464,7 @@ class SQLAlchemyPartnerRepository(_SQLRepositoryBase):
                     partner_query,
                     {
                         "partner_name": partner_name,
-                        "created_at": datetime.now(timezone.utc),
+                        "created_at": now_kst(),
                     },
                 )
                 partner_id = result.lastrowid
@@ -483,7 +481,7 @@ class SQLAlchemyPartnerRepository(_SQLRepositoryBase):
                     {
                         "account_id": partner_id,
                         "number": phone,
-                        "created_at": datetime.now(timezone.utc),
+                        "created_at": now_kst(),
                     },
                 )
 
@@ -499,7 +497,7 @@ class SQLAlchemyPartnerRepository(_SQLRepositoryBase):
                     {
                         "partner_id": partner_id,
                         "pin": pin_hash,
-                        "created_at": datetime.now(timezone.utc),
+                        "created_at": now_kst(),
                     },
                 )
 
