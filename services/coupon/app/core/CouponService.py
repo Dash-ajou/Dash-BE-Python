@@ -785,4 +785,122 @@ class CouponService:
         
         # 알 수 없는 상태
         raise ValueError("ERR-IVD-VALUE")
+    
+    async def decide_issue(
+        self,
+        issue_id: int,
+        partner_id: int,
+        is_approved: bool,
+        products: list[dict] | None = None,  # [{"isNew": bool, "productId": int | None, "productName": str | None, "count": int}]
+        reason: str | None = None,
+    ) -> None:
+        """
+        발행기록에 대한 파트너의 결정을 처리합니다.
+        
+        Args:
+            issue_id: 발행기록 ID
+            partner_id: 파트너 ID
+            is_approved: 승인 여부
+            products: 승인된 상품 목록 (is_approved가 True인 경우 필수)
+            reason: 반려 사유 (is_approved가 False인 경우 필수)
+            
+        Raises:
+            ValueError: 유효하지 않은 값인 경우 ("ERR-IVD-VALUE")
+            ValueError: 이미 결정된 발행기록인 경우 ("ERR-ALREADY-DECIDED")
+        """
+        # 유효성 검사
+        if is_approved:
+            if not products or len(products) == 0:
+                raise ValueError("ERR-IVD-VALUE")
+            
+            # products 유효성 검사
+            products_data = []
+            for product in products:
+                is_new = product.get("isNew", False)
+                count = product.get("count", 0)
+                
+                if count <= 0:
+                    raise ValueError("ERR-IVD-VALUE")
+                
+                if not is_new:
+                    # 기존 상품인 경우 productId 필수
+                    if product.get("productId") is None:
+                        raise ValueError("ERR-IVD-VALUE")
+                else:
+                    # 신규 상품인 경우 productName 필수
+                    if not product.get("productName"):
+                        raise ValueError("ERR-IVD-VALUE")
+                
+                products_data.append({
+                    "is_new": is_new,
+                    "product_id": product.get("productId"),
+                    "product_name": product.get("productName"),
+                    "count": count,
+                })
+        else:
+            if not reason:
+                raise ValueError("ERR-IVD-VALUE")
+        
+        # Repository 호출
+        await self.coupon_repository.decide_issue(
+            issue_id=issue_id,
+            partner_id=partner_id,
+            is_approved=is_approved,
+            products=products_data if is_approved else None,
+            reason=reason if not is_approved else None,
+        )
+    
+    async def create_self_issue(
+        self,
+        partner_id: int,
+        title: str,
+        products: list[dict],  # [{"isNew": bool, "productId": int | None, "productName": str | None, "count": int}]
+    ) -> None:
+        """
+        파트너가 직접 쿠폰을 발행합니다.
+        
+        Args:
+            partner_id: 파트너 ID
+            title: 발행 제목
+            products: 상품 목록
+            
+        Raises:
+            ValueError: 유효하지 않은 값인 경우 ("ERR-IVD-VALUE")
+        """
+        # 유효성 검사
+        # 1. products가 비어있는 경우
+        if not products or len(products) == 0:
+            raise ValueError("ERR-IVD-VALUE")
+        
+        # 2. products 유효성 검사
+        products_data = []
+        for product in products:
+            is_new = product.get("isNew", False)
+            count = product.get("count", 0)
+            
+            if count <= 0:
+                raise ValueError("ERR-IVD-VALUE")
+            
+            if not is_new:
+                # 기존 상품인 경우 productId 필수
+                if product.get("productId") is None:
+                    raise ValueError("ERR-IVD-VALUE")
+            else:
+                # 신규 상품인 경우 productName 필수
+                if not product.get("productName"):
+                    raise ValueError("ERR-IVD-VALUE")
+            
+            products_data.append({
+                "is_new": is_new,
+                "product_id": product.get("productId"),
+                "product_name": product.get("productName"),
+                "count": count,
+            })
+        
+        # Repository 호출
+        await self.coupon_repository.create_self_issue(
+            partner_id=partner_id,
+            title=title,
+            products=products_data,
+        )
 

@@ -1572,7 +1572,8 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                         il.partner_phone,
                         il.partner_name,
                         il.requested_at,
-                        il.decided_at
+                        il.decided_at,
+                        il.reason
                     FROM issue_logs il
                     WHERE il.issue_id = :issue_id
                       AND {permission_condition}
@@ -1591,7 +1592,7 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 
                 (issue_id_val, status, requested_issue_count, approved_issue_count, 
                  valid_days, vendor_id, partner_id, partner_phone, partner_name,
-                 requested_at, decided_at) = result
+                 requested_at, decided_at, reason) = result
                 
                 # 상태 확인
                 approved_statuses = ["ISSUE_STATUS/ISSUED", "ISSUE_STATUS/SHARED", "ISSUE_STATUS/COMPLETED"]
@@ -1715,14 +1716,13 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 
                 # 반려된 경우
                 elif status == rejected_status:
-                    # 반려 사유는 DB에 저장되지 않으므로 기본 메시지 사용
-                    # TODO: 나중에 reason 필드가 추가되면 조회하도록 수정
-                    reason = "파트너에 의해 반려되었습니다."
+                    # 반려 사유는 DB에서 조회 (없으면 기본 메시지)
+                    reason_text = reason if reason else "파트너에 의해 반려되었습니다."
                     
                     return {
                         "status": "REJECTED",
                         "requested_issue_count": requested_issue_count,
-                        "reason": reason,
+                        "reason": reason_text,
                         "requested_at": requested_at,
                         "decided_at": decided_at,
                     }
@@ -1731,4 +1731,449 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 return None
         
         return await self._run_in_thread(_query)
+    
+    async def decide_issue(
+        self,
+        issue_id: int,
+        partner_id: int,
+        is_approved: bool,
+        products: list[dict] | None = None,  # [{"is_new": bool, "product_id": int | None, "product_name": str | None, "count": int}]
+        reason: str | None = None,
+    ) -> None:
+        """
+        발행기록에 대한 파트너의 결정을 처리합니다.
+        
+        Args:
+            issue_id: 발행기록 ID
+            partner_id: 파트너 ID
+            is_approved: 승인 여부
+            products: 승인된 상품 목록 (is_approved가 True인 경우 필수)
+            reason: 반려 사유 (is_approved가 False인 경우 필수)
+            
+        Raises:
+            ValueError: 유효하지 않은 값인 경우 ("ERR-IVD-VALUE")
+            ValueError: 이미 결정된 발행기록인 경우 ("ERR-ALREADY-DECIDED")
+        """
+        def _decide():
+            with self._session_factory() as session:
+                from datetime import timedelta
+                from libs.common import now_kst
+                import random
+                
+                now = now_kst()
+                
+                # 1. 발행기록 조회 및 권한 확인
+                issue_query = text("""
+                    SELECT 
+                        il.issue_id,
+                        il.status,
+                        il.partner_id,
+                        il.vendor_id,
+                        il.valid_days,
+                        il.requested_issue_count
+                    FROM issue_logs il
+                    WHERE il.issue_id = :issue_id
+                      AND il.partner_id = :partner_id
+                      AND il.partner_deleted_at IS NULL
+                """)
+                
+                issue_result = session.execute(
+                    issue_query,
+                    {
+                        "issue_id": issue_id,
+                        "partner_id": partner_id,
+                    }
+                ).fetchone()
+                
+                if not issue_result:
+                    raise ValueError("ERR-IVD-VALUE")
+                
+                issue_id_val, status, partner_id_val, vendor_id, valid_days, requested_issue_count = issue_result
+                
+                # 이미 결정된 경우 확인
+                if status not in ["ISSUE_STATUS/PENDING", "ISSUE_STATUS/PAYMENT_READY"]:
+                    raise ValueError("ERR-ALREADY-DECIDED")
+                
+                # 2. 승인 처리
+                if is_approved:
+                    if not products or len(products) == 0:
+                        raise ValueError("ERR-IVD-VALUE")
+                    
+                    # 상품 처리 및 쿠폰 생성
+                    approved_issue_count = 0
+                    product_kind_count = len(products)
+                    
+                    for product in products:
+                        is_new = product.get("is_new", False)
+                        count = product.get("count", 0)
+                        
+                        if count <= 0:
+                            raise ValueError("ERR-IVD-VALUE")
+                        
+                        approved_issue_count += count
+                        
+                        # 신규 상품인 경우 products 테이블에 추가
+                        final_product_id = None
+                        if is_new:
+                            product_name = product.get("product_name")
+                            if not product_name:
+                                raise ValueError("ERR-IVD-VALUE")
+                            
+                            product_insert_query = text("""
+                                INSERT INTO products (partner_id, product_name, created_at)
+                                VALUES (:partner_id, :product_name, :created_at)
+                            """)
+                            product_result = session.execute(
+                                product_insert_query,
+                                {
+                                    "partner_id": partner_id,
+                                    "product_name": product_name,
+                                    "created_at": now,
+                                }
+                            )
+                            final_product_id = product_result.lastrowid
+                        else:
+                            product_id = product.get("product_id")
+                            if product_id is None:
+                                raise ValueError("ERR-IVD-VALUE")
+                            
+                            # 상품 존재 및 파트너 소유 확인
+                            check_query = text("""
+                                SELECT product_id FROM products 
+                                WHERE product_id = :product_id AND partner_id = :partner_id
+                            """)
+                            check_result = session.execute(
+                                check_query,
+                                {
+                                    "product_id": product_id,
+                                    "partner_id": partner_id,
+                                }
+                            ).fetchone()
+                            
+                            if check_result is None:
+                                raise ValueError("ERR-IVD-VALUE")
+                            
+                            final_product_id = product_id
+                        
+                        # issue_products에서 해당 상품 찾기 및 업데이트
+                        # REQUEST stage인 issue_products를 찾아서 APPROVE로 변경
+                        # 신규 상품인 경우 product_name으로 매칭, 기존 상품인 경우 product_id로 매칭
+                        if is_new:
+                            # 신규 상품: product_name으로 매칭
+                            issue_product_update_query = text("""
+                                UPDATE issue_products
+                                SET stage = 'APPROVE',
+                                    product_id = :product_id,
+                                    count = :count
+                                WHERE issue_id = :issue_id
+                                  AND stage = 'REQUEST'
+                                  AND product_id IS NULL
+                                  AND product_name = :product_name
+                                LIMIT 1
+                            """)
+                            session.execute(
+                                issue_product_update_query,
+                                {
+                                    "issue_id": issue_id,
+                                    "product_id": final_product_id,
+                                    "product_name": product_name,
+                                    "count": count,
+                                }
+                            )
+                        else:
+                            # 기존 상품: product_id로 매칭
+                            issue_product_update_query = text("""
+                                UPDATE issue_products
+                                SET stage = 'APPROVE',
+                                    product_id = :product_id,
+                                    count = :count
+                                WHERE issue_id = :issue_id
+                                  AND stage = 'REQUEST'
+                                  AND product_id = :product_id
+                                LIMIT 1
+                            """)
+                            session.execute(
+                                issue_product_update_query,
+                                {
+                                    "issue_id": issue_id,
+                                    "product_id": final_product_id,
+                                    "count": count,
+                                }
+                            )
+                        
+                        # 쿠폰 생성 (count만큼)
+                        expired_at = now + timedelta(days=valid_days)
+                        for _ in range(count):
+                            # 숫자 10자리 registration_code 생성
+                            registration_code = ''.join([str(random.randint(0, 9)) for _ in range(10)])
+                            
+                            # 중복 확인 (매우 드물지만)
+                            check_code_query = text("""
+                                SELECT coupon_id FROM coupons WHERE registration_code = :registration_code
+                            """)
+                            while session.execute(
+                                check_code_query,
+                                {"registration_code": registration_code}
+                            ).fetchone():
+                                registration_code = ''.join([str(random.randint(0, 9)) for _ in range(10)])
+                            
+                            coupon_insert_query = text("""
+                                INSERT INTO coupons (
+                                    issue_id, product_id, registration_code, partner_id,
+                                    created_at, expired_at
+                                )
+                                VALUES (
+                                    :issue_id, :product_id, :registration_code, :partner_id,
+                                    :created_at, :expired_at
+                                )
+                            """)
+                            session.execute(
+                                coupon_insert_query,
+                                {
+                                    "issue_id": issue_id,
+                                    "product_id": final_product_id,
+                                    "registration_code": registration_code,
+                                    "partner_id": partner_id,
+                                    "created_at": now,
+                                    "expired_at": expired_at,
+                                }
+                            )
+                    
+                    # 발행기록 상태 업데이트
+                    update_issue_query = text("""
+                        UPDATE issue_logs
+                        SET status = 'ISSUE_STATUS/ISSUED',
+                            decided_at = :decided_at,
+                            approved_issue_count = :approved_issue_count,
+                            product_kind_count = :product_kind_count
+                        WHERE issue_id = :issue_id
+                    """)
+                    session.execute(
+                        update_issue_query,
+                        {
+                            "issue_id": issue_id,
+                            "decided_at": now,
+                            "approved_issue_count": approved_issue_count,
+                            "product_kind_count": product_kind_count,
+                        }
+                    )
+                
+                # 3. 거절 처리
+                else:
+                    if not reason:
+                        raise ValueError("ERR-IVD-VALUE")
+                    
+                    # 발행기록 상태 업데이트 (reason 포함)
+                    update_issue_query = text("""
+                        UPDATE issue_logs
+                        SET status = 'ISSUE_STATUS/REJECTED',
+                            decided_at = :decided_at,
+                            reason = :reason
+                        WHERE issue_id = :issue_id
+                    """)
+                    session.execute(
+                        update_issue_query,
+                        {
+                            "issue_id": issue_id,
+                            "decided_at": now,
+                            "reason": reason,
+                        }
+                    )
+                
+                session.commit()
+        
+        return await self._run_in_thread(_decide)
+    
+    async def create_self_issue(
+        self,
+        partner_id: int,
+        title: str,
+        products: list[dict],  # [{"is_new": bool, "product_id": int | None, "product_name": str | None, "count": int}]
+        valid_days: int = 30,  # 기본값 30일
+    ) -> int:
+        """
+        파트너가 직접 쿠폰을 발행합니다.
+        
+        Args:
+            partner_id: 파트너 ID
+            title: 발행 제목
+            products: 상품 목록 (각 항목은 is_new, product_id/product_name, count 포함)
+            valid_days: 쿠폰 유효 일수 (기본값: 30일)
+            
+        Returns:
+            생성된 issue_id
+            
+        Raises:
+            ValueError: 유효하지 않은 값인 경우 ("ERR-IVD-VALUE")
+        """
+        def _create():
+            with self._session_factory() as session:
+                from datetime import timedelta
+                from libs.common import now_kst
+                import random
+                
+                now = now_kst()
+                
+                # 1. 파트너 존재 확인
+                check_query = text("""
+                    SELECT partner_id FROM partner_users WHERE partner_id = :partner_id
+                """)
+                check_result = session.execute(
+                    check_query,
+                    {"partner_id": partner_id}
+                ).fetchone()
+                
+                if check_result is None:
+                    raise ValueError("ERR-IVD-VALUE")
+                
+                # 2. 상품 처리 및 product_id 수집
+                product_info_list = []  # [{"product_id": int, "count": int}]
+                product_kind_count = len(products)
+                approved_issue_count = 0
+                
+                for product in products:
+                    is_new = product.get("is_new", False)
+                    count = product.get("count", 0)
+                    
+                    if count <= 0:
+                        raise ValueError("ERR-IVD-VALUE")
+                    
+                    approved_issue_count += count
+                    
+                    # 신규 상품인 경우 products 테이블에 추가
+                    final_product_id = None
+                    if is_new:
+                        product_name = product.get("product_name")
+                        if not product_name:
+                            raise ValueError("ERR-IVD-VALUE")
+                        
+                        product_insert_query = text("""
+                            INSERT INTO products (partner_id, product_name, created_at)
+                            VALUES (:partner_id, :product_name, :created_at)
+                        """)
+                        product_result = session.execute(
+                            product_insert_query,
+                            {
+                                "partner_id": partner_id,
+                                "product_name": product_name,
+                                "created_at": now,
+                            }
+                        )
+                        final_product_id = product_result.lastrowid
+                    else:
+                        product_id = product.get("product_id")
+                        if product_id is None:
+                            raise ValueError("ERR-IVD-VALUE")
+                        
+                        # 상품 존재 및 파트너 소유 확인
+                        check_query = text("""
+                            SELECT product_id FROM products 
+                            WHERE product_id = :product_id AND partner_id = :partner_id
+                        """)
+                        check_result = session.execute(
+                            check_query,
+                            {
+                                "product_id": product_id,
+                                "partner_id": partner_id,
+                            }
+                        ).fetchone()
+                        
+                        if check_result is None:
+                            raise ValueError("ERR-IVD-VALUE")
+                        
+                        final_product_id = product_id
+                    
+                    product_info_list.append({
+                        "product_id": final_product_id,
+                        "count": count,
+                    })
+                
+                # 3. IssueLog 생성 (상태는 바로 ISSUED)
+                issue_query = text("""
+                    INSERT INTO issue_logs (
+                        title, product_kind_count, requested_issue_count, approved_issue_count,
+                        requested_at, decided_at, valid_days, status, vendor_id, partner_id, created_at
+                    )
+                    VALUES (
+                        :title, :product_kind_count, :approved_issue_count, :approved_issue_count,
+                        :now, :now, :valid_days, 'ISSUE_STATUS/ISSUED', NULL, :partner_id, :created_at
+                    )
+                """)
+                result = session.execute(
+                    issue_query,
+                    {
+                        "title": title,
+                        "product_kind_count": product_kind_count,
+                        "approved_issue_count": approved_issue_count,
+                        "now": now,
+                        "valid_days": valid_days,
+                        "partner_id": partner_id,
+                        "created_at": now,
+                    }
+                )
+                issue_id = result.lastrowid
+                
+                # 4. IssueProduct 생성 및 쿠폰 생성
+                expired_at = now + timedelta(days=valid_days)
+                
+                for product_info in product_info_list:
+                    final_product_id = product_info["product_id"]
+                    count = product_info["count"]
+                    
+                    # IssueProduct 생성 (stage는 APPROVE)
+                    issue_product_query = text("""
+                        INSERT INTO issue_products (issue_id, product_id, product_name, stage, count, created_at)
+                        VALUES (:issue_id, :product_id, NULL, 'APPROVE', :count, :created_at)
+                    """)
+                    session.execute(
+                        issue_product_query,
+                        {
+                            "issue_id": issue_id,
+                            "product_id": final_product_id,
+                            "count": count,
+                            "created_at": now,
+                        }
+                    )
+                    
+                    # 쿠폰 생성 (count만큼)
+                    for _ in range(count):
+                        # 숫자 10자리 registration_code 생성
+                        registration_code = ''.join([str(random.randint(0, 9)) for _ in range(10)])
+                        
+                        # 중복 확인 (매우 드물지만)
+                        check_code_query = text("""
+                            SELECT coupon_id FROM coupons WHERE registration_code = :registration_code
+                        """)
+                        while session.execute(
+                            check_code_query,
+                            {"registration_code": registration_code}
+                        ).fetchone():
+                            registration_code = ''.join([str(random.randint(0, 9)) for _ in range(10)])
+                        
+                        coupon_insert_query = text("""
+                            INSERT INTO coupons (
+                                issue_id, product_id, registration_code, partner_id,
+                                created_at, expired_at
+                            )
+                            VALUES (
+                                :issue_id, :product_id, :registration_code, :partner_id,
+                                :created_at, :expired_at
+                            )
+                        """)
+                        session.execute(
+                            coupon_insert_query,
+                            {
+                                "issue_id": issue_id,
+                                "product_id": final_product_id,
+                                "registration_code": registration_code,
+                                "partner_id": partner_id,
+                                "created_at": now,
+                                "expired_at": expired_at,
+                            }
+                        )
+                
+                session.commit()
+                return issue_id
+        
+        return await self._run_in_thread(_create)
 

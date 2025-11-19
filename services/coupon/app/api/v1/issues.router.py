@@ -7,7 +7,12 @@ from libs.common import CurrentUser
 
 from services.coupon.app.core.CouponService import CouponService
 from services.coupon.app.dependencies import get_coupon_service
-from services.coupon.app.schemas.request import IssueDeleteSchema, IssueRequestSchema
+from services.coupon.app.schemas.request import (
+    IssueDecisionSchema,
+    IssueDeleteSchema,
+    IssueRequestSchema,
+    IssueSelfIssueSchema,
+)
 from services.coupon.app.schemas.response import IssueCouponsResponse, IssueListResponse, IssueRequestResponse
 
 router = APIRouter(prefix="/issues", tags=["Issues"])
@@ -292,6 +297,161 @@ async def get_issue_coupons(
             raise HTTPException(
                 status_code=status.HTTP_406_NOT_ACCEPTABLE,
                 detail="",
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": error_code},
+            )
+
+
+@router.post("/coupons", status_code=status.HTTP_200_OK)
+async def decide_issue(
+    payload: IssueDecisionSchema,
+    current_user: CurrentUser,
+    coupon_service: CouponService = Depends(get_coupon_service),
+):
+    """
+    파트너가 쿠폰 발행요청에 대한 발행여부를 결정합니다.
+    
+    **Headers:**
+    - `Authorization`: Bearer {access_token} (필수)
+    
+    **Request Body:**
+    - `issueId`: 발행기록 ID
+    - `isApproved`: 승인 여부
+    - `products`: 승인된 상품 목록 (isApproved가 true인 경우 필수)
+      - `isNew`: 신규 상품 여부
+      - `productId`: 기존 상품 ID (isNew가 false인 경우 필수)
+      - `productName`: 신규 상품명 (isNew가 true인 경우 필수)
+      - `count`: 승인 수량
+    - `reason`: 반려 사유 (isApproved가 false인 경우 필수)
+    
+    **Response:**
+    - HTTP 200 OK: 결정 성공 (빈 응답)
+    - HTTP 400 Bad Request: 유효하지 않은 발행기록 ID `{"code": "ERR-IVD-VALUE"}`
+    - HTTP 401 Unauthorized: 인증 실패 (빈 응답)
+    - HTTP 406 Not Acceptable: 이미 결정된 발행기록 (빈 응답)
+    
+    **권한 규칙:**
+    - 파트너사용자만 접근 가능
+    - partner_id가 일치하는 발행기록만 결정 가능
+    
+    **승인 시 처리:**
+    - 발행기록 상태를 `ISSUE_STATUS/ISSUED`로 변경
+    - 쿠폰 생성 (각 상품별로 count만큼)
+    - 신규 상품인 경우 products 테이블에 추가
+    """
+    subject_type, subject_id = current_user
+    
+    # 파트너사용자만 접근 가능
+    if subject_type != "partner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="파트너사용자만 발행요청을 결정할 수 있습니다.",
+        )
+    
+    try:
+        # 발행요청 결정
+        await coupon_service.decide_issue(
+            issue_id=payload.issueId,
+            partner_id=subject_id,
+            is_approved=payload.isApproved,
+            products=[
+                {
+                    "isNew": product.isNew,
+                    "productId": product.productId,
+                    "productName": product.productName,
+                    "count": product.count,
+                }
+                for product in (payload.products or [])
+            ] if payload.isApproved else None,
+            reason=payload.reason if not payload.isApproved else None,
+        )
+        return Response(status_code=status.HTTP_200_OK)
+    except ValueError as e:
+        error_code = str(e)
+        if error_code == "ERR-IVD-VALUE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "ERR-IVD-VALUE"},
+            )
+        elif error_code == "ERR-ALREADY-DECIDED":
+            raise HTTPException(
+                status_code=status.HTTP_406_NOT_ACCEPTABLE,
+                detail="",
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": error_code},
+            )
+
+
+@router.post("/coupons/self", status_code=status.HTTP_200_OK)
+async def create_self_issue(
+    payload: IssueSelfIssueSchema,
+    current_user: CurrentUser,
+    coupon_service: CouponService = Depends(get_coupon_service),
+):
+    """
+    파트너가 발행요청 없이 직접 쿠폰을 발행합니다.
+    
+    **Headers:**
+    - `Authorization`: Bearer {access_token} (필수)
+    
+    **Request Body:**
+    - `title`: 발행 제목
+    - `products`: 상품 목록
+      - `isNew`: 신규 상품 여부
+      - `productId`: 기존 상품 ID (isNew가 false인 경우 필수)
+      - `productName`: 신규 상품명 (isNew가 true인 경우 필수)
+      - `count`: 발행 수량
+    
+    **Response:**
+    - HTTP 200 OK: 발행 성공 (빈 응답)
+    - HTTP 400 Bad Request: 유효하지 않은 값인 경우 `{"code": "ERR-IVD-VALUE"}`
+    - HTTP 401 Unauthorized: 인증 실패 (빈 응답)
+    
+    **권한 규칙:**
+    - 파트너사용자만 접근 가능
+    
+    **처리 내용:**
+    - 발행기록 상태를 바로 `ISSUE_STATUS/ISSUED`로 설정
+    - 쿠폰도 함께 바로 발행
+    - 신규 상품인 경우 products 테이블에 추가
+    """
+    subject_type, subject_id = current_user
+    
+    # 파트너사용자만 접근 가능
+    if subject_type != "partner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="파트너사용자만 직접 쿠폰을 발행할 수 있습니다.",
+        )
+    
+    try:
+        # 자체 발행 처리
+        await coupon_service.create_self_issue(
+            partner_id=subject_id,
+            title=payload.title,
+            products=[
+                {
+                    "isNew": product.isNew,
+                    "productId": product.productId,
+                    "productName": product.productName,
+                    "count": product.count,
+                }
+                for product in payload.products
+            ],
+        )
+        return Response(status_code=status.HTTP_200_OK)
+    except ValueError as e:
+        error_code = str(e)
+        if error_code == "ERR-IVD-VALUE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "ERR-IVD-VALUE"},
             )
         else:
             raise HTTPException(
