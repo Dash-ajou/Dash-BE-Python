@@ -46,7 +46,7 @@ async def get_products_by_partner(
     
     # keyword가 비어있는 경우 400 Bad Request 반환
     if not keyword or keyword.strip() == "":
-    raise HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "ERR-IVD-VALUE"},
         )
@@ -60,4 +60,3 @@ async def get_products_by_partner(
     )
     
     return result
-

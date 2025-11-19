@@ -102,10 +102,10 @@ async def delete_issues(
                 detail={"code": "ERR-NOT-YOURS"},
             )
         else:
-    raise HTTPException(
+            raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": error_code},
-    )
+            )
 
 
 @router.post("/requests", status_code=status.HTTP_200_OK)
