@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Response, Security, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from libs.common import now_kst
+from libs.common import now_kst, ensure_kst
 
 from services.auth.app.core.LoginService import LoginError, LoginService
 from services.auth.app.dependencies import get_login_service
@@ -20,8 +20,27 @@ security = HTTPBearer(description="Access Token (Bearer)", auto_error=False)
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str, expires_at: datetime) -> None:
-    """RefreshToken을 쿠키에 설정하는 헬퍼 함수"""
-    max_age = max(int((expires_at - now_kst()).total_seconds()), 0)
+    """
+    RefreshToken을 쿠키에 설정하는 헬퍼 함수
+    
+    Args:
+        response: FastAPI Response 객체
+        refresh_token: Refresh token 문자열
+        expires_at: 만료 시간 (datetime)
+    """
+    if not refresh_token:
+        # refresh_token이 없으면 쿠키를 설정하지 않음
+        return
+    
+    # expires_at이 KST 시간대를 가지도록 보장
+    expires_at_kst = ensure_kst(expires_at)
+    now = now_kst()
+    max_age = max(int((expires_at_kst - now).total_seconds()), 0)
+    
+    # max_age가 0 이하면 쿠키를 설정하지 않음
+    if max_age <= 0:
+        return
+    
     response.set_cookie(
         key="X-REFRESH-TOKEN",
         value=refresh_token,
