@@ -29,3 +29,5 @@ htmlcov/
 # Database Architecture
 *.sql
 db/volumes/
+
+storage/*
