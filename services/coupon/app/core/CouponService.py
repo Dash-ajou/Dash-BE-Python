@@ -539,4 +539,75 @@ class CouponService:
             size=size,
             pages=pages,
         )
+    
+    async def create_issue_request(
+        self,
+        vendor_id: int,
+        title: str,
+        partner: dict,  # {"isNew": bool, "partnerId": int | None, "partnerName": str | None, "partnerPhone": str | None}
+        products: list[dict],  # [{"isNew": bool, "productId": int | None, "productName": str | None, "count": int}]
+    ) -> None:
+        """
+        쿠폰 발행 요청을 생성합니다.
+        
+        Args:
+            vendor_id: 요청 벤더 ID (member_id)
+            title: 발행 요청 제목
+            partner: 파트너 정보
+            products: 상품 목록
+            
+        Raises:
+            ValueError: 유효하지 않은 값인 경우 ("ERR-IVD-VALUE")
+        """
+        # 유효성 검사
+        # 1. products가 비어있는 경우
+        if not products or len(products) == 0:
+            raise ValueError("ERR-IVD-VALUE")
+        
+        # 2. partner 유효성 검사
+        partner_is_new = partner.get("isNew", False)
+        if not partner_is_new:
+            # 기존 파트너인 경우 partnerId 필수
+            if partner.get("partnerId") is None:
+                raise ValueError("ERR-IVD-VALUE")
+        else:
+            # 신규 파트너인 경우 partnerName, partnerPhone 필수
+            if not partner.get("partnerName") or not partner.get("partnerPhone"):
+                raise ValueError("ERR-IVD-VALUE")
+        
+        # 3. products 유효성 검사
+        products_data = []
+        for product in products:
+            is_new = product.get("isNew", False)
+            count = product.get("count", 0)
+            
+            if count <= 0:
+                raise ValueError("ERR-IVD-VALUE")
+            
+            if not is_new:
+                # 기존 상품인 경우 productId 필수
+                if product.get("productId") is None:
+                    raise ValueError("ERR-IVD-VALUE")
+            else:
+                # 신규 상품인 경우 productName 필수
+                if not product.get("productName"):
+                    raise ValueError("ERR-IVD-VALUE")
+            
+            products_data.append({
+                "is_new": is_new,
+                "product_id": product.get("productId"),
+                "product_name": product.get("productName"),
+                "count": count,
+            })
+        
+        # Repository 호출
+        await self.coupon_repository.create_issue_request(
+            vendor_id=vendor_id,
+            title=title,
+            partner_is_new=partner_is_new,
+            partner_id=partner.get("partnerId"),
+            partner_name=partner.get("partnerName"),
+            partner_phone=partner.get("partnerPhone"),
+            products=products_data,
+        )
 

@@ -628,7 +628,7 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 session.commit()
         
         return await self._run_in_thread(_register)
-    
+
     async def find_issues_by_user(
         self,
         subject_type: str,
@@ -1069,4 +1069,289 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 return (products, total)
         
         return await self._run_in_thread(_query)
+    
+    async def create_issue_request(
+        self,
+        vendor_id: int,
+        title: str,
+        partner_is_new: bool,
+        partner_id: int | None,
+        partner_name: str | None,
+        partner_phone: str | None,
+        products: list[dict],  # [{"is_new": bool, "product_id": int | None, "product_name": str | None, "count": int}]
+        valid_days: int = 30,  # 기본값 30일
+    ) -> int:
+        """
+        쿠폰 발행 요청을 생성합니다.
+        
+        Args:
+            vendor_id: 요청 벤더 ID (member_id)
+            title: 발행 요청 제목
+            partner_is_new: 신규 파트너 여부
+            partner_id: 기존 파트너 ID (partner_is_new가 False인 경우)
+            partner_name: 신규 파트너명 (partner_is_new가 True인 경우)
+            partner_phone: 신규 파트너 전화번호 (partner_is_new가 True인 경우)
+            products: 상품 목록 (각 항목은 is_new, product_id/product_name, count 포함)
+            valid_days: 쿠폰 유효 일수 (기본값: 30일)
+            
+        Returns:
+            생성된 issue_id
+            
+        Raises:
+            ValueError: 유효하지 않은 값인 경우 ("ERR-IVD-VALUE")
+        """
+        def _create():
+            with self._session_factory() as session:
+                from libs.common import now_kst
+                
+                now = now_kst()
+                
+                # 1. 파트너 처리
+                final_partner_id = None
+                final_partner_phone = None
+                
+                if partner_is_new:
+                    # 신규 파트너: 계정 생성하지 않고 전화번호만 저장
+                    if not partner_name or not partner_phone:
+                        raise ValueError("ERR-IVD-VALUE")
+                    
+                    # 전화번호 정규화 (하이픈 제거 등)
+                    normalized_phone = partner_phone.replace("-", "").replace(" ", "")
+                    final_partner_phone = normalized_phone
+                    # partner_id는 NULL로 유지 (나중에 가입 시 매핑)
+                else:
+                    # 기존 파트너 사용
+                    if partner_id is None:
+                        raise ValueError("ERR-IVD-VALUE")
+                    
+                    # 파트너 존재 확인
+                    check_query = text("""
+                        SELECT partner_id FROM partner_users WHERE partner_id = :partner_id
+                    """)
+                    check_result = session.execute(
+                        check_query,
+                        {"partner_id": partner_id}
+                    ).fetchone()
+                    
+                    if check_result is None:
+                        raise ValueError("ERR-IVD-VALUE")
+                    
+                    final_partner_id = partner_id
+                
+                # 2. 상품 처리 및 product 정보 수집
+                product_info_list = []  # [{"product_id": int | None, "product_name": str | None, "count": int}]
+                product_kind_count = len(products)
+                requested_issue_count = 0
+                
+                for product in products:
+                    is_new = product.get("is_new", False)
+                    count = product.get("count", 0)
+                    
+                    if count <= 0:
+                        raise ValueError("ERR-IVD-VALUE")
+                    
+                    requested_issue_count += count
+                    
+                    if partner_is_new:
+                        # 신규 파트너인 경우: 상품 생성하지 않고 이름만 저장
+                        if is_new:
+                            product_name = product.get("product_name")
+                            if not product_name:
+                                raise ValueError("ERR-IVD-VALUE")
+                            product_info_list.append({
+                                "product_id": None,
+                                "product_name": product_name,
+                                "count": count,
+                            })
+                        else:
+                            # 신규 파트너인데 기존 상품을 선택한 경우는 불가능
+                            raise ValueError("ERR-IVD-VALUE")
+                    else:
+                        # 기존 파트너인 경우: 기존 로직 유지
+                        if is_new:
+                            # 신규 상품 생성
+                            product_name = product.get("product_name")
+                            if not product_name:
+                                raise ValueError("ERR-IVD-VALUE")
+                            
+                            product_query = text("""
+                                INSERT INTO products (partner_id, product_name, created_at)
+                                VALUES (:partner_id, :product_name, :created_at)
+                            """)
+                            result = session.execute(
+                                product_query,
+                                {
+                                    "partner_id": final_partner_id,
+                                    "product_name": product_name,
+                                    "created_at": now,
+                                }
+                            )
+                            product_id = result.lastrowid
+                            product_info_list.append({
+                                "product_id": product_id,
+                                "product_name": None,
+                                "count": count,
+                            })
+                        else:
+                            # 기존 상품 사용
+                            product_id = product.get("product_id")
+                            if product_id is None:
+                                raise ValueError("ERR-IVD-VALUE")
+                            
+                            # 상품 존재 및 파트너 소유 확인
+                            check_query = text("""
+                                SELECT product_id FROM products 
+                                WHERE product_id = :product_id AND partner_id = :partner_id
+                            """)
+                            check_result = session.execute(
+                                check_query,
+                                {
+                                    "product_id": product_id,
+                                    "partner_id": final_partner_id,
+                                }
+                            ).fetchone()
+                            
+                            if check_result is None:
+                                raise ValueError("ERR-IVD-VALUE")
+                            
+                            product_info_list.append({
+                                "product_id": product_id,
+                                "product_name": None,
+                                "count": count,
+                            })
+                
+                # 3. IssueLog 생성
+                issue_query = text("""
+                    INSERT INTO issue_logs (
+                        title, product_kind_count, requested_issue_count, approved_issue_count,
+                        requested_at, valid_days, status, vendor_id, partner_id, partner_phone, created_at
+                    )
+                    VALUES (
+                        :title, :product_kind_count, :requested_issue_count, 0,
+                        :requested_at, :valid_days, 'ISSUE_STATUS/PENDING', :vendor_id, :partner_id, :partner_phone, :created_at
+                    )
+                """)
+                result = session.execute(
+                    issue_query,
+                    {
+                        "title": title,
+                        "product_kind_count": product_kind_count,
+                        "requested_issue_count": requested_issue_count,
+                        "requested_at": now,
+                        "valid_days": valid_days,
+                        "vendor_id": vendor_id,
+                        "partner_id": final_partner_id,
+                        "partner_phone": final_partner_phone,
+                        "created_at": now,
+                    }
+                )
+                issue_id = result.lastrowid
+                
+                # 4. IssueProduct 생성 (stage는 REQUEST)
+                for item in product_info_list:
+                    issue_product_query = text("""
+                        INSERT INTO issue_products (issue_id, product_id, product_name, stage, count, created_at)
+                        VALUES (:issue_id, :product_id, :product_name, 'REQUEST', :count, :created_at)
+                    """)
+                    session.execute(
+                        issue_product_query,
+                        {
+                            "issue_id": issue_id,
+                            "product_id": item["product_id"],
+                            "product_name": item["product_name"],
+                            "count": item["count"],
+                            "created_at": now,
+                        }
+                    )
+                
+                session.commit()
+                return issue_id
+        
+        return await self._run_in_thread(_create)
+    
+    async def map_partner_to_issues(
+        self,
+        partner_id: int,
+        partner_phone: str,
+    ) -> None:
+        """
+        파트너 가입 시 발행요청과 매핑합니다.
+        
+        Args:
+            partner_id: 가입한 파트너 ID
+            partner_phone: 파트너 전화번호 (정규화된 형태)
+        """
+        def _map():
+            with self._session_factory() as session:
+                from libs.common import now_kst
+                
+                # 1. issue_logs에서 partner_phone이 일치하고 partner_id가 NULL인 레코드 찾기
+                # 2. partner_id 업데이트
+                update_issue_query = text("""
+                    UPDATE issue_logs
+                    SET partner_id = :partner_id
+                    WHERE partner_phone = :partner_phone
+                      AND partner_id IS NULL
+                """)
+                session.execute(
+                    update_issue_query,
+                    {
+                        "partner_id": partner_id,
+                        "partner_phone": partner_phone,
+                    }
+                )
+                
+                # 3. issue_products에서 product_id가 NULL인 레코드 찾기
+                # 4. products 생성하고 product_id 업데이트
+                # 먼저 issue_product_id와 product_name 목록 가져오기
+                issue_products_query = text("""
+                    SELECT ip.issue_product_id, ip.issue_id, ip.product_name, ip.count
+                    FROM issue_products ip
+                    INNER JOIN issue_logs il ON ip.issue_id = il.issue_id
+                    WHERE il.partner_id = :partner_id
+                      AND ip.product_id IS NULL
+                      AND ip.product_name IS NOT NULL
+                    ORDER BY ip.issue_product_id
+                """)
+                issue_products = session.execute(
+                    issue_products_query,
+                    {"partner_id": partner_id}
+                ).fetchall()
+                
+                now = now_kst()
+                
+                # 각 상품 생성 및 매핑
+                for issue_product_id, issue_id, product_name, count in issue_products:
+                    # 상품 생성
+                    product_query = text("""
+                        INSERT INTO products (partner_id, product_name, created_at)
+                        VALUES (:partner_id, :product_name, :created_at)
+                    """)
+                    result = session.execute(
+                        product_query,
+                        {
+                            "partner_id": partner_id,
+                            "product_name": product_name,
+                            "created_at": now,
+                        }
+                    )
+                    product_id = result.lastrowid
+                    
+                    # issue_products의 product_id 업데이트 (issue_product_id로 정확히 매핑)
+                    update_product_query = text("""
+                        UPDATE issue_products
+                        SET product_id = :product_id
+                        WHERE issue_product_id = :issue_product_id
+                    """)
+                    session.execute(
+                        update_product_query,
+                        {
+                            "product_id": product_id,
+                            "issue_product_id": issue_product_id,
+                        }
+                    )
+                
+                session.commit()
+        
+        return await self._run_in_thread(_map)
 

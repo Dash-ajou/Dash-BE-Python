@@ -7,7 +7,7 @@ from libs.common import CurrentUser
 
 from services.coupon.app.core.CouponService import CouponService
 from services.coupon.app.dependencies import get_coupon_service
-from services.coupon.app.schemas.request import IssueDeleteSchema
+from services.coupon.app.schemas.request import IssueDeleteSchema, IssueRequestSchema
 from services.coupon.app.schemas.response import IssueListResponse
 
 router = APIRouter(prefix="/issues", tags=["Issues"])
@@ -102,33 +102,87 @@ async def delete_issues(
                 detail={"code": "ERR-NOT-YOURS"},
             )
         else:
-            raise HTTPException(
+    raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": error_code},
-            )
+    )
 
 
 @router.post("/requests", status_code=status.HTTP_200_OK)
 async def create_issue_request(
+    payload: IssueRequestSchema,
     current_user: CurrentUser,
+    coupon_service: CouponService = Depends(get_coupon_service),
 ):
     """
-    이슈 요청을 생성합니다.
+    쿠폰에 대한 발행요청을 생성합니다.
+    
+    생성 즉시 파트너에게 전달됩니다.
     
     **Headers:**
     - `Authorization`: Bearer {access_token} (필수)
     
+    **Request Body:**
+    - `title`: 발행 요청 제목
+    - `partner`: 파트너 정보
+      - `isNew`: 신규 파트너 여부
+      - `partnerId`: 기존 파트너 ID (isNew가 false인 경우)
+      - `partnerName`: 신규 파트너명 (isNew가 true인 경우)
+      - `partnerPhone`: 신규 파트너 전화번호 (isNew가 true인 경우)
+    - `products`: 상품 목록
+      - `isNew`: 신규 상품 여부
+      - `productId`: 기존 상품 ID (isNew가 false인 경우)
+      - `productName`: 신규 상품명 (isNew가 true인 경우)
+      - `count`: 요청 수량
+    
     **Response:**
-    - HTTP 200 OK: 요청 생성 성공
-    - HTTP 401 Unauthorized: 인증 실패
+    - HTTP 200 OK: 요청 생성 성공 (빈 응답)
+    - HTTP 400 Bad Request: 유효하지 않은 값인 경우 `{"code": "ERR-IVD-VALUE"}`
+    - HTTP 401 Unauthorized: 인증 실패 (빈 응답)
     """
     subject_type, subject_id = current_user
     
-    # TODO: 실제 구현 필요
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="이 엔드포인트는 아직 구현되지 않았습니다.",
-    )
+    # 개인사용자만 요청 가능
+    if subject_type != "member":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="개인사용자만 발행 요청을 생성할 수 있습니다.",
+        )
+    
+    try:
+        # 이슈 요청 생성
+        await coupon_service.create_issue_request(
+            vendor_id=subject_id,
+            title=payload.title,
+            partner={
+                "isNew": payload.partner.isNew,
+                "partnerId": payload.partner.partnerId,
+                "partnerName": payload.partner.partnerName,
+                "partnerPhone": payload.partner.partnerPhone,
+            },
+            products=[
+                {
+                    "isNew": product.isNew,
+                    "productId": product.productId,
+                    "productName": product.productName,
+                    "count": product.count,
+                }
+                for product in payload.products
+            ],
+        )
+        return Response(status_code=status.HTTP_200_OK)
+    except ValueError as e:
+        error_code = str(e)
+        if error_code == "ERR-IVD-VALUE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "ERR-IVD-VALUE"},
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": error_code},
+            )
 
 
 @router.get("/{issueId}/requests", status_code=status.HTTP_200_OK)

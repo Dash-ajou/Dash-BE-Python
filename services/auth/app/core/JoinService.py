@@ -29,6 +29,15 @@ class PartnerCreatePort(Protocol):
     ) -> int: ...
 
 
+class IssueMappingPort(Protocol):
+    """발행요청 매핑 인터페이스"""
+    async def map_partner_to_issues(
+        self,
+        partner_id: int,
+        partner_phone: str,
+    ) -> None: ...
+
+
 class JoinService:
     SUBJECT_MEMBER = "member"
     SUBJECT_PARTNER = "partner"
@@ -41,6 +50,7 @@ class JoinService:
         partner_create: PartnerCreatePort | None = None,
         phone_service: PhoneService | None = None,
         login_service: LoginService | None = None,
+        issue_mapper: IssueMappingPort | None = None,
     ):
         self.member_repository = member_repository
         self.member_create = member_create
@@ -48,6 +58,7 @@ class JoinService:
         self.partner_create = partner_create
         self.phone_service = phone_service or PhoneService()
         self.login_service = login_service
+        self.issue_mapper = issue_mapper
 
     async def join_member(
         self,
@@ -134,6 +145,17 @@ class JoinService:
         partner = await self.partner_repository.find_partner_by_id(partner_id)
         if partner is None:
             raise JoinError("ERR-INTERNAL", "파트너 정보를 찾을 수 없습니다.")
+
+        # 5. 발행요청과 매핑 (있는 경우)
+        if self.issue_mapper:
+            try:
+                await self.issue_mapper.map_partner_to_issues(
+                    partner_id=partner_id,
+                    partner_phone=phone,
+                )
+            except Exception:
+                # 매핑 실패해도 가입은 성공으로 처리 (로그만 남기고 계속 진행)
+                pass
 
         return await self.login_service._issue_tokens(partner_id, self.SUBJECT_PARTNER, partner.partnerName)
 

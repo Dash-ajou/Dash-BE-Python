@@ -13,6 +13,12 @@ from services.auth.app.db.repositories.groups import SQLAlchemyGroupRepository
 from services.auth.app.db.stores.phone import SQLPhoneAuthTokenStore, SQLPhoneVerificationStore
 from services.auth.app.db.stores.refresh_token import SQLRefreshTokenStore
 
+# Coupon repository (optional, for issue mapping)
+try:
+    from services.coupon.app.db.repositories.coupons import SQLAlchemyCouponRepository
+except ImportError:
+    SQLAlchemyCouponRepository = None
+
 
 @lru_cache
 def _member_repository() -> SQLAlchemyMemberRepository:
@@ -69,6 +75,14 @@ def get_login_service() -> LoginService:
 
 
 @lru_cache
+def _coupon_repository():
+    """Coupon repository (optional, for issue mapping)"""
+    if SQLAlchemyCouponRepository is None:
+        return None
+    return SQLAlchemyCouponRepository()
+
+
+@lru_cache
 def get_join_service() -> JoinService:
     return JoinService(
         member_repository=_member_repository(),
@@ -77,6 +91,7 @@ def get_join_service() -> JoinService:
         partner_create=_partner_repository(),  # SQLAlchemyPartnerRepository가 PartnerCreatePort를 구현
         phone_service=get_phone_service(),
         login_service=get_login_service(),
+        issue_mapper=_coupon_repository(),  # Coupon repository for issue mapping
     )
 
 
