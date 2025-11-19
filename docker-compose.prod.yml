@@ -33,6 +33,34 @@ services:
       start_period: 40s
 
   # ==================================
+  # Coupon Service (Production)
+  # ==================================
+  coupon:
+    build:
+      context: . # Monorepo 루트
+      dockerfile: services/coupon/Dockerfile
+    ports:
+      - "8002:8002"
+    env_file:
+      - ./.env.production  # 프로덕션 환경 변수 파일
+    environment:
+      - PYTHONPATH=/home/appuser
+    # 프로덕션에서는 볼륨 마운트 없이 이미지 내부 코드 사용
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - dash-network
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ==================================
   # MySQL Database (Production)
   # ==================================
   db:

@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlalchemy
+pymysql
+cryptography
+pydantic-settings
+fastapi-pagination
+gunicorn
+PyJWT
+

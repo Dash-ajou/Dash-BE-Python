@@ -27,7 +27,34 @@ services:
       sh -c "gunicorn -k uvicorn.workers.UvicornWorker -w 1 --reload -b 0.0.0.0:8000 services.auth.app.main:app"
   
   # ==================================
-  # Auth Service (Hot-Reload)
+  # Coupon Service (Hot-Reload)
+  # ==================================
+  coupon:
+    build:
+      context: . # Monorepo 루트
+      dockerfile: services/coupon/Dockerfile
+    ports:
+      - "8002:8002" # 로컬 8002 -> coupon 컨테이너 8002
+    env_file:
+      - ./.env # 루트의 .env 파일 사용
+    volumes:
+      # 로컬의 코드를 컨테이너에 마운트하여 Hot-Reload 가능하게 함
+      # libs: 전역 스키마 및 공통 라이브러리
+      - ./libs:/home/appuser/libs
+      # services: 서비스 코드 (import 경로를 위해 필요)
+      - ./services:/home/appuser/services
+    environment:
+      # PYTHONPATH를 루트로 설정하여 libs와 services를 import 가능하게 함
+      - PYTHONPATH=/home/appuser
+    # Dockerfile의 CMD를 덮어쓰고, 개발용 --reload 옵션을 추가합니다.
+    # Gunicorn 1개 워커로 --reload를 실행합니다.
+    command: >
+      sh -c "gunicorn -k uvicorn.workers.UvicornWorker -w 1 --reload -b 0.0.0.0:8002 services.coupon.app.main:app"
+    depends_on:
+      - db
+  
+  # ==================================
+  # MySQL Database
   # ==================================
   db:
     image: mysql:lts

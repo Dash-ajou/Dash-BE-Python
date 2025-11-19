@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: coupon-service
+  namespace: dash
+  labels:
+    app: coupon-service
+spec:
+  type: ClusterIP  # LoadBalancer 또는 NodePort로 변경 가능
+  ports:
+  - port: 80
+    targetPort: 8002
+    protocol: TCP
+    name: http
+  selector:
+    app: coupon-service
+  # 세션 어피니티 (필요시)
+  # sessionAffinity: ClientIP
+  # sessionAffinityConfig:
+  #   clientIP:
+  #     timeoutSeconds: 10800
+
