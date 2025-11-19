@@ -7,4 +7,5 @@ pydantic-settings
 fastapi-pagination
 gunicorn
 PyJWT
+httpx
 

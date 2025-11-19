@@ -23,6 +23,7 @@ from services.coupon.app.schemas.request.PaymentConfirmSchema import (
 from services.coupon.app.schemas.request.PaymentTransactionSchema import (
     PaymentTransactionSchema,
 )
+from services.coupon.app.schemas.request.PaymentQrSchema import PaymentQrSchema
 
 __all__ = [
     "CouponAddSchema",
@@ -34,6 +35,7 @@ __all__ = [
     "IssueSelfIssueSchema",
     "PartnerRequestSchema",
     "PaymentConfirmSchema",
+    "PaymentQrSchema",
     "PaymentTransactionSchema",
     "ProductDecisionSchema",
     "ProductRequestSchema",

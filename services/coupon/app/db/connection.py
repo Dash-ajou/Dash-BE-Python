@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # JWT 설정 (인증 서비스와 동일한 키 사용)
     JWT_SECRET_KEY: str = "change-me-in-production"  # JWT 서명에 사용할 시크릿 키
     JWT_ALGORITHM: str = "HS256"  # JWT 알고리즘
+    
+    # Media 서버 URL (내부 MSA 통신용)
+    MEDIA_SERVICE_URL: str = "http://localhost:8003"  # Media 서비스 URL
 
     class Config:
         # 루트 디렉터리의 .env 파일을 읽도록 경로 수정

@@ -2,6 +2,7 @@
 쿠폰 관련 Repository 구현
 """
 import asyncio
+from datetime import datetime
 from typing import Callable, Protocol, Tuple
 
 from sqlalchemy import text
@@ -130,6 +131,77 @@ class CouponRepositoryPort(Protocol):
             member_id: 회원 ID
             registration_code: 등록 코드 (검증용)
             signature_code: 서명 이미지 코드
+        """
+        ...
+    
+    async def find_coupon_by_id_for_payment_qr(
+        self,
+        coupon_id: int,
+        member_id: int,
+    ) -> dict | None:
+        """
+        결제 QR 생성을 위한 쿠폰 정보를 조회합니다 (소유권 확인 포함).
+        
+        Args:
+            coupon_id: 쿠폰 ID
+            member_id: 회원 ID (소유권 확인용)
+            
+        Returns:
+            쿠폰 정보 딕셔너리 또는 None
+            - coupon_id: 쿠폰 ID
+            - registration_code: 결제코드
+            - register_id: 등록자 ID
+            - use_log_id: 사용 로그 ID
+            - expired_at: 쿠폰 만료 일시
+        """
+        ...
+    
+    async def expire_payment_qr_by_coupon_id(
+        self,
+        coupon_id: int,
+    ) -> None:
+        """
+        특정 쿠폰의 모든 활성 QR 코드를 만료 처리합니다.
+        
+        Args:
+            coupon_id: 쿠폰 ID
+        """
+        ...
+    
+    async def create_payment_qr(
+        self,
+        coupon_id: int,
+        payment_code: str,
+        expired_at: datetime,
+    ) -> int:
+        """
+        결제 QR 코드를 생성합니다.
+        
+        Args:
+            coupon_id: 쿠폰 ID
+            payment_code: 결제코드 (registration_code)
+            expired_at: 만료 일시
+            
+        Returns:
+            생성된 결제 QR 코드 ID
+        """
+        ...
+    
+    async def find_active_payment_qr_by_coupon_id(
+        self,
+        coupon_id: int,
+    ) -> dict | None:
+        """
+        활성 결제 QR 코드를 조회합니다.
+        
+        Args:
+            coupon_id: 쿠폰 ID
+            
+        Returns:
+            결제 QR 코드 정보 딕셔너리 또는 None
+            - payment_qr_id: 결제 QR 코드 ID
+            - payment_code: 결제코드
+            - expired_at: 만료 일시
         """
         ...
 
@@ -2202,7 +2274,7 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
         결제코드로 쿠폰을 조회합니다.
         
         Args:
-            payment_code: 결제코드 (registration_code)
+            payment_code: 결제코드 (UUID)
             
         Returns:
             쿠폰 정보 딕셔너리 또는 None
@@ -2215,6 +2287,10 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
         """
         def _query():
             with self._session_factory() as session:
+                from libs.common import now_kst
+                
+                now = now_kst()
+                
                 query = text("""
                     SELECT 
                         c.coupon_id,
@@ -2223,17 +2299,19 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                         DATE_FORMAT(c.created_at, '%Y-%m-%d %H:%i:%s') as created_at,
                         DATE_FORMAT(c.expired_at, '%Y-%m-%d %H:%i:%s') as expired_at,
                         c.use_log_id
-                    FROM coupons c
+                    FROM payment_qr_codes pqr
+                    INNER JOIN coupons c ON pqr.coupon_id = c.coupon_id
                     INNER JOIN products p ON c.product_id = p.product_id
                     INNER JOIN issue_logs il ON c.issue_id = il.issue_id
                     INNER JOIN members m ON il.vendor_id = m.member_id
-                    WHERE c.registration_code = :payment_code
+                    WHERE pqr.payment_code = :payment_code
+                      AND pqr.expired_at > :now
                     LIMIT 1
                 """)
                 
                 result = session.execute(
                     query,
-                    {"payment_code": payment_code}
+                    {"payment_code": payment_code, "now": now}
                 ).fetchone()
                 
                 if result is None:
@@ -2258,7 +2336,7 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
         결제코드로 쿠폰을 결제처리합니다.
         
         Args:
-            payment_code: 결제코드 (registration_code)
+            payment_code: 결제코드 (UUID)
             
         Raises:
             ValueError: 쿠폰이 존재하지 않는 경우 ("ERR-IVD-VALUE")
@@ -2270,20 +2348,22 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 
                 now = now_kst()
                 
-                # 1. 결제코드로 쿠폰 조회
+                # 1. 결제코드로 쿠폰 조회 (유효기간 확인 포함)
                 coupon_query = text("""
                     SELECT 
                         c.coupon_id,
                         c.issue_id,
                         c.use_log_id
-                    FROM coupons c
-                    WHERE c.registration_code = :payment_code
+                    FROM payment_qr_codes pqr
+                    INNER JOIN coupons c ON pqr.coupon_id = c.coupon_id
+                    WHERE pqr.payment_code = :payment_code
+                      AND pqr.expired_at > :now
                     LIMIT 1
                 """)
                 
                 coupon_result = session.execute(
                     coupon_query,
-                    {"payment_code": payment_code}
+                    {"payment_code": payment_code, "now": now}
                 ).fetchone()
                 
                 if coupon_result is None:
@@ -2358,4 +2438,148 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 session.commit()
         
         return await self._run_in_thread(_confirm)
+    
+    async def find_coupon_by_id_for_payment_qr(
+        self,
+        coupon_id: int,
+        member_id: int,
+    ) -> dict | None:
+        """
+        결제 QR 생성을 위한 쿠폰 정보를 조회합니다 (소유권 확인 포함).
+        """
+        def _query():
+            with self._session_factory() as session:
+                query = text("""
+                    SELECT 
+                        c.coupon_id,
+                        c.registration_code,
+                        c.register_id,
+                        c.use_log_id,
+                        DATE_FORMAT(c.expired_at, '%Y-%m-%d %H:%i:%s') as expired_at
+                    FROM coupons c
+                    LEFT JOIN register_logs rl ON c.register_log_id = rl.register_log_id
+                    WHERE c.coupon_id = :coupon_id
+                      AND c.register_id = :member_id
+                      AND (rl.deleted_at IS NULL OR rl.register_log_id IS NULL)
+                    LIMIT 1
+                """)
+                
+                result = session.execute(
+                    query,
+                    {"coupon_id": coupon_id, "member_id": member_id}
+                ).fetchone()
+                
+                if result is None:
+                    return None
+                
+                return {
+                    "coupon_id": result[0],
+                    "registration_code": result[1],
+                    "register_id": result[2],
+                    "use_log_id": result[3],
+                    "expired_at": result[4],
+                }
+        
+        return await self._run_in_thread(_query)
+    
+    async def expire_payment_qr_by_coupon_id(
+        self,
+        coupon_id: int,
+    ) -> None:
+        """특정 쿠폰의 모든 활성 QR 코드를 만료 처리합니다."""
+        def _expire():
+            with self._session_factory() as session:
+                from libs.common import now_kst
+                
+                now = now_kst()
+                
+                # 만료 시간을 현재 시간 이전으로 설정하여 만료 처리
+                expire_query = text("""
+                    UPDATE payment_qr_codes
+                    SET expired_at = :now
+                    WHERE coupon_id = :coupon_id
+                      AND expired_at > :now
+                """)
+                
+                session.execute(
+                    expire_query,
+                    {"coupon_id": coupon_id, "now": now}
+                )
+                
+                session.commit()
+        
+        return await self._run_in_thread(_expire)
+    
+    async def create_payment_qr(
+        self,
+        coupon_id: int,
+        payment_code: str,
+        expired_at: datetime,
+    ) -> int:
+        """결제 QR 코드를 생성합니다."""
+        def _create():
+            with self._session_factory() as session:
+                from libs.common import now_kst
+                
+                now = now_kst()
+                
+                insert_query = text("""
+                    INSERT INTO payment_qr_codes (coupon_id, payment_code, expired_at, created_at, updated_at)
+                    VALUES (:coupon_id, :payment_code, :expired_at, :created_at, :updated_at)
+                """)
+                
+                result = session.execute(
+                    insert_query,
+                    {
+                        "coupon_id": coupon_id,
+                        "payment_code": payment_code,
+                        "expired_at": expired_at,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+                
+                session.commit()
+                return result.lastrowid
+        
+        return await self._run_in_thread(_create)
+    
+    async def find_active_payment_qr_by_coupon_id(
+        self,
+        coupon_id: int,
+    ) -> dict | None:
+        """활성 결제 QR 코드를 조회합니다."""
+        def _query():
+            with self._session_factory() as session:
+                from libs.common import now_kst
+                
+                now = now_kst()
+                
+                query = text("""
+                    SELECT 
+                        payment_qr_id,
+                        payment_code,
+                        DATE_FORMAT(expired_at, '%Y-%m-%d %H:%i:%s') as expired_at
+                    FROM payment_qr_codes
+                    WHERE coupon_id = :coupon_id
+                      AND expired_at > :now
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """)
+                
+                result = session.execute(
+                    query,
+                    {"coupon_id": coupon_id, "now": now}
+                ).fetchone()
+                
+                if result is None:
+                    return None
+                
+                return {
+                    "payment_qr_id": result[0],
+                    "payment_code": result[1],
+                    "expired_at": result[2],
+                }
+        
+        return await self._run_in_thread(_query)
 

@@ -20,6 +20,7 @@ from services.coupon.app.schemas.response import (
     PartnerListResponse,
     PaymentLogCouponInfo,
     PaymentLogItem,
+    PaymentQrResponse,
     PaymentTransactionResponse,
     ProductInfoInCoupons,
     ProductInfoInRequest,
@@ -961,5 +962,105 @@ class CouponService:
         """
         await self.coupon_repository.confirm_payment_transaction(
             payment_code=payment_code,
+        )
+    
+    async def create_payment_qr(
+        self,
+        coupon_id: int,
+        member_id: int,
+    ) -> PaymentQrResponse:
+        """
+        결제 QR 코드를 생성합니다.
+        
+        Args:
+            coupon_id: 쿠폰 ID
+            member_id: 회원 ID (소유권 확인용)
+            
+        Returns:
+            결제 QR 코드 정보
+            
+        Raises:
+            ValueError: 쿠폰이 존재하지 않거나 소유하지 않은 경우 ("ERR-IVD-VALUE")
+            ValueError: 이미 사용한 경우 ("ERR-IVD-VALUE")
+            ValueError: 쿠폰이 만료된 경우 ("ERR-IVD-VALUE")
+        """
+        from datetime import timedelta
+        import httpx
+        from services.coupon.app.schemas.response import PaymentQrResponse
+        from services.coupon.app.db.connection import settings
+        from libs.common import now_kst
+        
+        # 1. 쿠폰 정보 조회 (소유권 확인 포함)
+        coupon_data = await self.coupon_repository.find_coupon_by_id_for_payment_qr(
+            coupon_id=coupon_id,
+            member_id=member_id,
+        )
+        
+        if coupon_data is None:
+            # 쿠폰이 존재하지 않거나 소유하지 않은 경우
+            # 먼저 쿠폰이 존재하는지 확인
+            coupon_exists = await self.coupon_repository.find_coupon_by_id(coupon_id)
+            if coupon_exists is None:
+                raise ValueError("ERR-IVD-VALUE")
+            else:
+                # 쿠폰은 존재하지만 소유하지 않은 경우
+                raise ValueError("ERR-NOT-YOURS")
+        
+        # 2. 쿠폰 유효성 검사
+        # - 이미 사용한 경우
+        if coupon_data["use_log_id"] is not None:
+            raise ValueError("ERR-IVD-VALUE")
+        
+        # - 만료된 경우
+        now = now_kst()
+        expired_at_str = coupon_data["expired_at"]
+        from datetime import datetime
+        from libs.common import KST_TIMEZONE
+        expired_at = datetime.strptime(expired_at_str, "%Y-%m-%d %H:%M:%S")
+        # timezone-naive를 timezone-aware로 변환 (KST로 가정)
+        expired_at = expired_at.replace(tzinfo=KST_TIMEZONE)
+        if expired_at < now:
+            raise ValueError("ERR-IVD-VALUE")
+        
+        # 3. 기존 활성 QR 코드 만료 처리
+        await self.coupon_repository.expire_payment_qr_by_coupon_id(coupon_id)
+        
+        # 4. 결제코드 생성 (UUID)
+        import uuid
+        payment_code = str(uuid.uuid4())
+        
+        # 5. 새로운 QR 코드 만료 시간 설정 (1분 후)
+        qr_expired_at = now + timedelta(minutes=1)
+        
+        # 6. 결제 QR 코드 DB에 저장
+        await self.coupon_repository.create_payment_qr(
+            coupon_id=coupon_id,
+            payment_code=payment_code,
+            expired_at=qr_expired_at,
+        )
+        
+        # 7. Media 서버로 QR 코드 이미지 생성 요청
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"{settings.MEDIA_SERVICE_URL}/generate/qrcode",
+                    json={
+                        "data": payment_code,
+                        "file_name": f"payment_qr_{coupon_id}.png",
+                    },
+                )
+                response.raise_for_status()
+                qr_data = response.json()
+                file_id = qr_data["fileId"]
+        except Exception as e:
+            # Media 서버 요청 실패 시 예외 발생
+            raise ValueError(f"QR 코드 생성 실패: {str(e)}")
+        
+        # 8. 응답 생성
+        code_img_url = f"{settings.MEDIA_SERVICE_URL}/media/{file_id}"
+        
+        return PaymentQrResponse(
+            codeImg=code_img_url,
+            expiredAt=qr_expired_at.strftime("%Y-%m-%d %H:%M:%S"),
         )
 

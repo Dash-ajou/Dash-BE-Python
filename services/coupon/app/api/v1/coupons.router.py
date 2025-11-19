@@ -10,11 +10,13 @@ from services.coupon.app.schemas.request import (
     CouponAddSchema,
     CouponDeleteSchema,
     CouponRegisterSchema,
+    PaymentQrSchema,
 )
 from services.coupon.app.schemas.response import (
     CouponAddResponse,
     CouponDetailResponse,
     CouponListItem,
+    PaymentQrResponse,
 )
 
 # 쿠폰 기본 CRUD 라우터
@@ -311,5 +313,65 @@ async def delete_coupons(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"code": "ERR-IVD-VALUE"},
+            )
+
+
+@router.post("/pay/qr", response_model=PaymentQrResponse, status_code=status.HTTP_200_OK)
+async def create_payment_qr(
+    payload: PaymentQrSchema,
+    current_user: CurrentUser,
+    coupon_service: CouponService = Depends(get_coupon_service),
+):
+    """
+    특정 쿠폰에 대한 결제 QR을 생성합니다.
+    
+    **Headers:**
+    - `Authorization`: Bearer {access_token} (필수)
+    
+    **Request Body:**
+    - `couponId`: 쿠폰 ID
+    
+    **Response:**
+    - HTTP 200 OK: 결제 QR 생성 성공
+    - HTTP 400 Bad Request: 유효하지 않은 쿠폰 `{"code": "ERR-IVD-VALUE"}`
+    - HTTP 401 Unauthorized: 인증 실패 (빈 응답)
+    - HTTP 403 Forbidden: 본인이 등록하지 않은 쿠폰 `{"code": "ERR-NOT-YOURS"}`
+    
+    **처리 내용:**
+    - 결제 QR의 유효기간은 1분
+    - 유효기간이 남은 상태에서 다시 요청하는 경우, 앞서 발급된 결제 QR은 즉시 만료
+    """
+    subject_type, subject_id = current_user
+    
+    # 개인회원만 접근 가능
+    if subject_type != "member":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="개인회원만 결제 QR을 생성할 수 있습니다.",
+        )
+    
+    try:
+        # 결제 QR 생성
+        result = await coupon_service.create_payment_qr(
+            coupon_id=payload.couponId,
+            member_id=subject_id,
+        )
+        return result
+    except ValueError as e:
+        error_code = str(e)
+        if error_code == "ERR-IVD-VALUE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "ERR-IVD-VALUE"},
+            )
+        elif error_code == "ERR-NOT-YOURS":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "ERR-NOT-YOURS"},
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": error_code},
             )
 

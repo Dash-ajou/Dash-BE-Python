@@ -65,7 +65,7 @@ async def get_payment_log(
     return result
 
 
-@router.get("/transaction", response_model=PaymentTransactionResponse, status_code=status.HTTP_200_OK)
+@router.post("/transaction", response_model=PaymentTransactionResponse, status_code=status.HTTP_200_OK)
 async def get_payment_transaction(
     current_user: CurrentUser,
     payload: PaymentTransactionSchema = Body(...),
