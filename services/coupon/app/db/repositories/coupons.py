@@ -1855,51 +1855,68 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                             
                             final_product_id = product_id
                         
-                        # issue_products에서 해당 상품 찾기 및 업데이트
-                        # REQUEST stage인 issue_products를 찾아서 APPROVE로 변경
-                        # 신규 상품인 경우 product_name으로 매칭, 기존 상품인 경우 product_id로 매칭
+                        # 새로운 IssueProduct 생성 (stage='APPROVE')
+                        # 벤더가 입력한 원본 product_name을 유지하기 위해 REQUEST stage의 product_name을 참조
+                        # REQUEST stage에서 원본 product_name을 가져옴
+                        original_product_name = None
                         if is_new:
-                            # 신규 상품: product_name으로 매칭
-                            issue_product_update_query = text("""
-                                UPDATE issue_products
-                                SET stage = 'APPROVE',
-                                    product_id = :product_id,
-                                    count = :count
+                            # 신규 상품: REQUEST stage에서 product_name으로 찾아서 원본 이름 가져오기
+                            find_request_query = text("""
+                                SELECT product_name
+                                FROM issue_products
                                 WHERE issue_id = :issue_id
                                   AND stage = 'REQUEST'
                                   AND product_id IS NULL
                                   AND product_name = :product_name
                                 LIMIT 1
                             """)
-                            session.execute(
-                                issue_product_update_query,
+                            request_result = session.execute(
+                                find_request_query,
                                 {
                                     "issue_id": issue_id,
-                                    "product_id": final_product_id,
                                     "product_name": product_name,
-                                    "count": count,
                                 }
-                            )
+                            ).fetchone()
+                            if request_result:
+                                original_product_name = request_result[0]
                         else:
-                            # 기존 상품: product_id로 매칭
-                            issue_product_update_query = text("""
-                                UPDATE issue_products
-                                SET stage = 'APPROVE',
-                                    product_id = :product_id,
-                                    count = :count
-                                WHERE issue_id = :issue_id
-                                  AND stage = 'REQUEST'
-                                  AND product_id = :product_id
+                            # 기존 상품: REQUEST stage에서 product_id로 찾아서 원본 이름 가져오기
+                            # product_name이 NULL이면 products 테이블에서 가져오기
+                            find_request_query = text("""
+                                SELECT 
+                                    COALESCE(ip.product_name, p.product_name) as product_name
+                                FROM issue_products ip
+                                LEFT JOIN products p ON ip.product_id = p.product_id
+                                WHERE ip.issue_id = :issue_id
+                                  AND ip.stage = 'REQUEST'
+                                  AND ip.product_id = :product_id
                                 LIMIT 1
                             """)
-                            session.execute(
-                                issue_product_update_query,
+                            request_result = session.execute(
+                                find_request_query,
                                 {
                                     "issue_id": issue_id,
                                     "product_id": final_product_id,
-                                    "count": count,
                                 }
-                            )
+                            ).fetchone()
+                            if request_result:
+                                original_product_name = request_result[0]
+                        
+                        # 새로운 IssueProduct 생성 (stage='APPROVE')
+                        issue_product_insert_query = text("""
+                            INSERT INTO issue_products (issue_id, product_id, product_name, stage, count, created_at)
+                            VALUES (:issue_id, :product_id, :product_name, 'APPROVE', :count, :created_at)
+                        """)
+                        session.execute(
+                            issue_product_insert_query,
+                            {
+                                "issue_id": issue_id,
+                                "product_id": final_product_id,
+                                "product_name": original_product_name,  # 벤더가 입력한 원본 이름 유지
+                                "count": count,
+                                "created_at": now,
+                            }
+                        )
                         
                         # 쿠폰 생성 (count만큼)
                         expired_at = now + timedelta(days=valid_days)
