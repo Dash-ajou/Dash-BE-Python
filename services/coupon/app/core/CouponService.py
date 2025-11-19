@@ -20,6 +20,7 @@ from services.coupon.app.schemas.response import (
     PartnerListResponse,
     PaymentLogCouponInfo,
     PaymentLogItem,
+    PaymentTransactionResponse,
     ProductInfoInCoupons,
     ProductInfoInRequest,
     ProductListItem,
@@ -902,5 +903,63 @@ class CouponService:
             partner_id=partner_id,
             title=title,
             products=products_data,
+        )
+    
+    async def get_payment_transaction(
+        self,
+        payment_code: str,
+    ) -> PaymentTransactionResponse:
+        """
+        결제코드로 쿠폰 정보를 조회합니다.
+        
+        Args:
+            payment_code: 결제코드 (registration_code)
+            
+        Returns:
+            쿠폰 정보
+            
+        Raises:
+            ValueError: 쿠폰이 존재하지 않는 경우 ("ERR-IVD-VALUE")
+            ValueError: 이미 사용한 경우 ("ERR-ALREADY-USED")
+        """
+        from services.coupon.app.schemas.response import PaymentTransactionResponse
+        
+        # 결제코드로 쿠폰 조회
+        coupon_data = await self.coupon_repository.find_coupon_by_payment_code(
+            payment_code
+        )
+        
+        if coupon_data is None:
+            raise ValueError("ERR-IVD-VALUE")
+        
+        # 이미 사용한 경우 확인
+        if coupon_data["use_log_id"] is not None:
+            raise ValueError("ERR-ALREADY-USED")
+        
+        # 쿠폰 정보 반환
+        return PaymentTransactionResponse(
+            couponId=coupon_data["coupon_id"],
+            productName=coupon_data["product_name"],
+            vendorName=coupon_data["vendor_name"],
+            createdAt=coupon_data["created_at"],
+            expiredAt=coupon_data["expired_at"],
+        )
+    
+    async def confirm_payment_transaction(
+        self,
+        payment_code: str,
+    ) -> None:
+        """
+        결제코드로 쿠폰을 결제처리합니다.
+        
+        Args:
+            payment_code: 결제코드 (registration_code)
+            
+        Raises:
+            ValueError: 쿠폰이 존재하지 않는 경우 ("ERR-IVD-VALUE")
+            ValueError: 이미 사용한 경우 ("ERR-ALREADY-USED")
+        """
+        await self.coupon_repository.confirm_payment_transaction(
+            payment_code=payment_code,
         )
 

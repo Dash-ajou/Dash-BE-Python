@@ -17,6 +17,12 @@ from services.coupon.app.schemas.request.IssueSelfIssueSchema import (
     IssueSelfIssueSchema,
     ProductSelfIssueSchema,
 )
+from services.coupon.app.schemas.request.PaymentConfirmSchema import (
+    PaymentConfirmSchema,
+)
+from services.coupon.app.schemas.request.PaymentTransactionSchema import (
+    PaymentTransactionSchema,
+)
 
 __all__ = [
     "CouponAddSchema",
@@ -27,6 +33,8 @@ __all__ = [
     "IssueRequestSchema",
     "IssueSelfIssueSchema",
     "PartnerRequestSchema",
+    "PaymentConfirmSchema",
+    "PaymentTransactionSchema",
     "ProductDecisionSchema",
     "ProductRequestSchema",
     "ProductSelfIssueSchema",

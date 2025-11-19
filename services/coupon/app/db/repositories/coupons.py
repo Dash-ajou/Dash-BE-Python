@@ -2193,4 +2193,169 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 return issue_id
         
         return await self._run_in_thread(_create)
+    
+    async def find_coupon_by_payment_code(
+        self,
+        payment_code: str,
+    ) -> dict | None:
+        """
+        결제코드로 쿠폰을 조회합니다.
+        
+        Args:
+            payment_code: 결제코드 (registration_code)
+            
+        Returns:
+            쿠폰 정보 딕셔너리 또는 None
+            - coupon_id: 쿠폰 ID
+            - product_name: 상품명
+            - vendor_name: 벤더(회원) 이름
+            - created_at: 생성 일시
+            - expired_at: 만료 일시
+            - use_log_id: 사용 로그 ID (NULL이면 미사용)
+        """
+        def _query():
+            with self._session_factory() as session:
+                query = text("""
+                    SELECT 
+                        c.coupon_id,
+                        p.product_name,
+                        m.member_name as vendor_name,
+                        DATE_FORMAT(c.created_at, '%Y-%m-%d %H:%i:%s') as created_at,
+                        DATE_FORMAT(c.expired_at, '%Y-%m-%d %H:%i:%s') as expired_at,
+                        c.use_log_id
+                    FROM coupons c
+                    INNER JOIN products p ON c.product_id = p.product_id
+                    INNER JOIN issue_logs il ON c.issue_id = il.issue_id
+                    INNER JOIN members m ON il.vendor_id = m.member_id
+                    WHERE c.registration_code = :payment_code
+                    LIMIT 1
+                """)
+                
+                result = session.execute(
+                    query,
+                    {"payment_code": payment_code}
+                ).fetchone()
+                
+                if result is None:
+                    return None
+                
+                return {
+                    "coupon_id": result[0],
+                    "product_name": result[1],
+                    "vendor_name": result[2],
+                    "created_at": result[3],
+                    "expired_at": result[4],
+                    "use_log_id": result[5],
+                }
+        
+        return await self._run_in_thread(_query)
+    
+    async def confirm_payment_transaction(
+        self,
+        payment_code: str,
+    ) -> None:
+        """
+        결제코드로 쿠폰을 결제처리합니다.
+        
+        Args:
+            payment_code: 결제코드 (registration_code)
+            
+        Raises:
+            ValueError: 쿠폰이 존재하지 않는 경우 ("ERR-IVD-VALUE")
+            ValueError: 이미 사용한 경우 ("ERR-ALREADY-USED")
+        """
+        def _confirm():
+            with self._session_factory() as session:
+                from libs.common import now_kst
+                
+                now = now_kst()
+                
+                # 1. 결제코드로 쿠폰 조회
+                coupon_query = text("""
+                    SELECT 
+                        c.coupon_id,
+                        c.issue_id,
+                        c.use_log_id
+                    FROM coupons c
+                    WHERE c.registration_code = :payment_code
+                    LIMIT 1
+                """)
+                
+                coupon_result = session.execute(
+                    coupon_query,
+                    {"payment_code": payment_code}
+                ).fetchone()
+                
+                if coupon_result is None:
+                    raise ValueError("ERR-IVD-VALUE")
+                
+                coupon_id, issue_id, use_log_id = coupon_result
+                
+                # 2. 이미 사용한 경우 확인
+                if use_log_id is not None:
+                    raise ValueError("ERR-ALREADY-USED")
+                
+                # 3. use_logs에 레코드 생성
+                use_log_insert_query = text("""
+                    INSERT INTO use_logs (coupon_id, used_at, created_at, updated_at)
+                    VALUES (:coupon_id, :used_at, :created_at, :updated_at)
+                """)
+                use_log_result = session.execute(
+                    use_log_insert_query,
+                    {
+                        "coupon_id": coupon_id,
+                        "used_at": now,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+                use_log_id = use_log_result.lastrowid
+                
+                # 4. coupons의 use_log_id 업데이트
+                coupon_update_query = text("""
+                    UPDATE coupons
+                    SET use_log_id = :use_log_id
+                    WHERE coupon_id = :coupon_id
+                """)
+                session.execute(
+                    coupon_update_query,
+                    {
+                        "coupon_id": coupon_id,
+                        "use_log_id": use_log_id,
+                    }
+                )
+                
+                # 5. 해당 issue_id의 모든 쿠폰이 결제되었는지 확인
+                check_all_used_query = text("""
+                    SELECT 
+                        COUNT(*) as total_count,
+                        SUM(CASE WHEN use_log_id IS NOT NULL THEN 1 ELSE 0 END) as used_count
+                    FROM coupons
+                    WHERE issue_id = :issue_id
+                """)
+                
+                check_result = session.execute(
+                    check_all_used_query,
+                    {"issue_id": issue_id}
+                ).fetchone()
+                
+                total_count, used_count = check_result
+                
+                # 6. 모든 쿠폰이 결제되었으면 issue_logs의 status를 'ISSUE_STATUS/COMPLETED'로 변경
+                if total_count > 0 and used_count == total_count:
+                    # 현재 상태가 ISSUED, SHARED인 경우에만 COMPLETED로 변경
+                    issue_update_query = text("""
+                        UPDATE issue_logs
+                        SET status = 'ISSUE_STATUS/COMPLETED'
+                        WHERE issue_id = :issue_id
+                          AND status IN ('ISSUE_STATUS/ISSUED', 'ISSUE_STATUS/SHARED')
+                    """)
+                    session.execute(
+                        issue_update_query,
+                        {"issue_id": issue_id}
+                    )
+                
+                session.commit()
+        
+        return await self._run_in_thread(_confirm)
 

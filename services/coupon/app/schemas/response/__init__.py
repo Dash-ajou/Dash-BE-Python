@@ -37,6 +37,9 @@ from services.coupon.app.schemas.response.IssueCouponsResponse import (
     PartnerInfoInCoupons,
     ProductInfoInCoupons,
 )
+from services.coupon.app.schemas.response.PaymentTransactionResponse import (
+    PaymentTransactionResponse,
+)
 
 __all__ = [
     "CouponAddResponse",
@@ -48,6 +51,7 @@ __all__ = [
     "UseLogInfo",
     "PaymentLogCouponInfo",
     "PaymentLogItem",
+    "PaymentTransactionResponse",
     "IssueListItem",
     "IssueListResponse",
     "PartnerListItem",
