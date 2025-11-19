@@ -19,6 +19,10 @@ class MemberRepositoryPort(Protocol):
     async def find_member_by_id(self, member_id: int) -> Member | None: ...
     
     async def update_phone(self, account_id: int, new_phone: str) -> None: ...
+    
+    async def update_groups(self, member_id: int, group_ids: list[str]) -> None: ...
+    
+    async def validate_group_ids(self, group_ids: list[str]) -> bool: ...
 
 
 class NullMemberRepository(MemberRepositoryPort):
@@ -30,6 +34,12 @@ class NullMemberRepository(MemberRepositoryPort):
     
     async def update_phone(self, account_id: int, new_phone: str) -> None:
         pass
+    
+    async def update_groups(self, member_id: int, group_ids: list[str]) -> None:
+        pass
+    
+    async def validate_group_ids(self, group_ids: list[str]) -> bool:
+        return True
 
 
 class PartnerRepositoryPort(Protocol):
@@ -372,6 +382,37 @@ class LoginService:
         
         # 7. 새 토큰 발급
         return await self._issue_tokens(subject_id, subject_type, member.memberName)
+
+    async def update_depart(
+        self,
+        access_token: str,
+        group_ids: list[str],
+    ) -> None:
+        """
+        개인사용자(MEMBER) 계정의 소속정보를 업데이트합니다.
+        파트너는 이 메서드를 사용할 수 없습니다.
+        
+        Args:
+            access_token: 액세스 토큰
+            group_ids: 소속 그룹 ID 목록 (전체 목록, 부분 업데이트 불가)
+            
+        Raises:
+            LoginError: 토큰이 유효하지 않거나, 파트너 계정이거나, 그룹 ID가 유효하지 않은 경우
+        """
+        # 1. Access token 검증
+        subject_type, subject_id = await self.verify_access_token(access_token)
+
+        # 2. 개인사용자(MEMBER)만 허용
+        if subject_type != self.SUBJECT_MEMBER:
+            raise LoginError("ERR-IVD-PARAM", "이 메서드는 개인사용자만 사용할 수 있습니다.")
+
+        # 3. 그룹 ID 검증
+        is_valid = await self.member_repository.validate_group_ids(group_ids)
+        if not is_valid:
+            raise LoginError("ERR-IVD-VALUE", "올바르지 않은 소속 ID가 포함되어 있습니다.")
+
+        # 4. 소속정보 업데이트 (기존 그룹 삭제 후 새로 추가)
+        await self.member_repository.update_groups(subject_id, group_ids)
 
     def _generate_access_token(
         self,

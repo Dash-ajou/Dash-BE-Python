@@ -1,14 +1,18 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, Security, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from services.auth.app.core.LoginService import LoginError, LoginService
 from services.auth.app.dependencies import get_login_service
 from services.auth.app.db.connection import settings
-from services.auth.app.schemas.request import PhoneUpdateSchema
+from services.auth.app.schemas.request import PhoneUpdateSchema, DepartUpdateSchema
 from services.auth.app.schemas.response import LoginResponse
 
 router = APIRouter(prefix="/users", tags=["Users"])
+
+# Swagger UI에서 Bearer token을 입력할 수 있도록 HTTPBearer 설정
+security = HTTPBearer(description="Access Token (Bearer)", auto_error=False)
 
 
 def _set_refresh_cookie(response: Response, refresh_token: str, expires_at: datetime) -> None:
@@ -36,11 +40,11 @@ def _clear_auth_cookies(response: Response) -> None:
         response.headers["clear-cookie"] = cookie_name
 
 
-@router.put("/phone", response_model=LoginResponse, status_code=status.HTTP_201_CREATED)
+@router.patch("/phone", response_model=LoginResponse, status_code=status.HTTP_201_CREATED)
 async def update_phone(
     payload: PhoneUpdateSchema,
     response: Response,
-    authorization: str | None = Header(default=None, alias="Authorization"),
+    credentials: HTTPAuthorizationCredentials | None = Security(security),
     login_service: LoginService = Depends(get_login_service),
 ):
     """
@@ -49,20 +53,14 @@ async def update_phone(
     요청 즉시 변경되며, accessToken 및 refreshToken이 새롭게 발급됩니다.
     파트너는 이 엔드포인트를 사용할 수 없습니다.
     """
-    # Authorization 헤더에서 Bearer token 추출
-    if not authorization:
+    # Bearer token 추출
+    if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authorization 헤더가 필요합니다.",
         )
     
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="올바른 Authorization 형식이 아닙니다. 'Bearer {token}' 형식을 사용하세요.",
-        )
-    
-    access_token = authorization[7:]  # "Bearer " 제거
+    access_token = credentials.credentials
     
     try:
         tokens = await login_service.update_phone(
@@ -87,5 +85,53 @@ async def update_phone(
     # 새 토큰을 쿠키에 설정
     _set_refresh_cookie(response, tokens.refresh_token, tokens.refresh_expires_at)
     
-    return LoginResponse(accessToken=tokens.access_token)
+    return LoginResponse(accessToken=tokens.access_token, userName=tokens.user_name)
+
+
+@router.put("/depart", status_code=status.HTTP_200_OK)
+async def update_depart(
+    payload: DepartUpdateSchema,
+    credentials: HTTPAuthorizationCredentials | None = Security(security),
+    login_service: LoginService = Depends(get_login_service),
+):
+    """
+    계정에 설정된 소속정보를 수정합니다.
+    
+    전달된 소속정보로 대체되므로, 수정된 내역만 보내는 것이 아닌 
+    모든 최종적으로 변경된 소속정보를 전부 보내야 합니다.
+    
+    **주의사항:**
+    - 개인사용자(MEMBER)만 사용 가능합니다.
+    - 부분 업데이트가 아닌 전체 교체입니다.
+    - 올바르지 않은 소속 ID가 1개라도 있으면 400 Bad Request를 반환합니다.
+    """
+    # Bearer token 추출
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="",
+        )
+    
+    access_token = credentials.credentials
+    
+    try:
+        await login_service.update_depart(
+            access_token=access_token,
+            group_ids=payload.departAt,
+        )
+    except LoginError as exc:
+        # 그룹 ID가 유효하지 않은 경우
+        if exc.code == "ERR-IVD-VALUE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="",
+            ) from exc
+        # 로그인 상태가 올바르지 않은 경우 (토큰 오류, 파트너 계정 등)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="",
+        ) from exc
+    
+    # 성공 시 빈 응답 반환 (HTTP 200 OK)
+    return Response(status_code=status.HTTP_200_OK)
 

@@ -5,6 +5,7 @@ from .PartnerLoginSchema import PartnerLoginSchema
 from .MemberJoinSchema import MemberJoinSchema
 from .PartnerJoinSchema import PartnerJoinSchema
 from .PhoneUpdateSchema import PhoneUpdateSchema
+from .DepartUpdateSchema import DepartUpdateSchema
 
 __all__ = [
     "PhoneRequest",
@@ -14,5 +15,6 @@ __all__ = [
     "MemberJoinSchema",
     "PartnerJoinSchema",
     "PhoneUpdateSchema",
+    "DepartUpdateSchema",
 ]
 

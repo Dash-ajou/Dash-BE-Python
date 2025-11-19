@@ -177,6 +177,67 @@ class SQLAlchemyMemberRepository(_SQLRepositoryBase):
 
         return await self._run_in_thread(_update)
 
+    async def update_groups(self, member_id: int, group_ids: list[str]) -> None:
+        """회원의 소속정보를 업데이트합니다. 기존 그룹을 모두 삭제하고 새로 추가합니다."""
+        def _update():
+            with self._session_factory() as session:
+                # 1. 기존 그룹 관계 모두 삭제
+                session.execute(
+                    text(
+                        """
+                        DELETE FROM member_groups
+                        WHERE member_id = :member_id
+                        """
+                    ),
+                    {"member_id": member_id},
+                )
+
+                # 2. 새로운 그룹 관계 추가
+                if group_ids and len(group_ids) > 0:
+                    member_group_query = text(
+                        """
+                        INSERT INTO member_groups (member_id, group_id, created_at)
+                        VALUES (:member_id, :group_id, :created_at)
+                        """
+                    )
+                    for group_id in group_ids:
+                        session.execute(
+                            member_group_query,
+                            {
+                                "member_id": member_id,
+                                "group_id": group_id,
+                                "created_at": datetime.now(timezone.utc),
+                            },
+                        )
+
+                session.commit()
+
+        return await self._run_in_thread(_update)
+
+    async def validate_group_ids(self, group_ids: list[str]) -> bool:
+        """그룹 ID 목록이 모두 유효한지 검증합니다."""
+        if not group_ids:
+            return True  # 빈 리스트는 유효함
+
+        def _validate():
+            with self._session_factory() as session:
+                # 전달된 group_ids가 모두 groups 테이블에 존재하는지 확인
+                result = session.execute(
+                    text(
+                        """
+                        SELECT COUNT(*) as count
+                        FROM groups
+                        WHERE group_id IN :group_ids
+                        """
+                    ),
+                    {"group_ids": tuple(group_ids)},
+                )
+                row = result.mappings().first()
+                valid_count = row["count"] if row else 0
+                return valid_count == len(group_ids)
+
+        return await self._run_in_thread(_validate)
+
     async def create_member(
         self, member_name: str, member_birth: str, phone: str, group_ids: list[str] | None = None
     ) -> int:
