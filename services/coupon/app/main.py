@@ -1,7 +1,13 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from services.coupon.app.api.v1.router import router
 from services.coupon.app.db.connection import settings
+
+# JWT 설정을 환경 변수로 설정 (libs/common/auth.py가 os.getenv()로 읽을 수 있도록)
+# Settings에서 읽은 값을 환경 변수로 설정 (이미 환경 변수가 있으면 덮어쓰지 않음)
+os.environ.setdefault("JWT_SECRET_KEY", settings.JWT_SECRET_KEY)
+os.environ.setdefault("JWT_ALGORITHM", settings.JWT_ALGORITHM)
 
 app = FastAPI(
     title="Coupon Service (쿠폰 서비스)",

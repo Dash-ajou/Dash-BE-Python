@@ -44,7 +44,7 @@ class CouponDetailResponse(BaseModel):
     id: int = Field(..., description="쿠폰 고유 식별자")
     productName: str = Field(..., description="상품명")
     partner: PartnerInfo = Field(..., description="파트너 정보")
-    register: RegisterInfo = Field(..., description="등록자 정보", serialization_alias="register")
+    register_info: RegisterInfo = Field(..., description="등록자 정보", alias="register")
     registerLog: RegisterLogInfo | None = Field(None, description="등록 로그 정보")
     isUsed: bool = Field(..., description="사용 여부")
     useLog: UseLogInfo | None = Field(None, description="사용 로그 정보 (사용한 경우만)")

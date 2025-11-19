@@ -3,12 +3,15 @@
 """
 from typing import Protocol
 
-from fastapi_pagination import Page, paginate
+from fastapi_pagination import Page
 
 from services.coupon.app.schemas.response import (
+    CouponAddResponse,
     CouponDetailResponse,
     CouponListItem,
     PartnerInfo,
+    PaymentLogCouponInfo,
+    PaymentLogItem,
     RegisterInfo,
     RegisterLogInfo,
     UseLogInfo,
@@ -72,11 +75,12 @@ class CouponService:
         ]
         
         # fastapi-pagination의 Page 객체 생성
-        return paginate(
-            items,
+        return Page(
+            items=items,
             total=total,
             page=page,
             size=size,
+            pages=(total + size - 1) // size if size > 0 else 0,
         )
     
     async def get_coupon_detail(
@@ -141,12 +145,147 @@ class CouponService:
             id=coupon_data["coupon_id"],
             productName=coupon_data["product_name"],
             partner=partner,
-            register=register,
+            register_info=register,  # alias="register"로 인해 JSON에서는 "register"로 표시됨
             registerLog=register_log,
             isUsed=is_used,
             useLog=use_log,
             createdAt=coupon_data["created_at"],
             expiredAt=coupon_data["expired_at"],
+        )
+    
+    async def get_coupon_by_registration_code(
+        self,
+        registration_code: str,
+        member_id: int,
+    ) -> CouponAddResponse:
+        """
+        등록코드로 쿠폰 정보를 조회합니다.
+        
+        Args:
+            registration_code: 쿠폰 등록 코드
+            member_id: 회원 ID (권한 확인용)
+            
+        Returns:
+            쿠폰 정보
+            
+        Raises:
+            ValueError: 쿠폰이 존재하지 않거나 이미 다른 사람에게 등록된 경우
+        """
+        # 등록코드로 쿠폰 조회
+        coupon_data = await self.coupon_repository.find_coupon_by_registration_code(
+            registration_code
+        )
+        
+        if coupon_data is None:
+            raise ValueError("ERR-IVD-VALUE")
+        
+        # 이미 등록된 쿠폰인지 확인 (본인이든 다른 사람이든 등록된 쿠폰은 조회 불가)
+        if coupon_data["register_id"] is not None:
+            raise ValueError("ERR-NOT-YOURS")
+        
+        # 쿠폰 정보 반환 (등록하지 않고 조회만)
+        return CouponAddResponse(
+            couponId=coupon_data["coupon_id"],
+            productName=coupon_data["product_name"],
+            partnerName=coupon_data["partner_name"],
+            createdAt=coupon_data["created_at"],
+            expiredAt=coupon_data["expired_at"],
+        )
+    
+    async def register_coupon(
+        self,
+        coupon_id: int,
+        registration_code: str,
+        signature_code: str,
+        member_id: int,
+    ) -> None:
+        """
+        쿠폰을 회원에게 등록합니다.
+        
+        Args:
+            coupon_id: 쿠폰 ID
+            registration_code: 등록 코드 (검증용)
+            signature_code: 서명 이미지 코드
+            member_id: 회원 ID
+            
+        Raises:
+            ValueError: 쿠폰이 존재하지 않거나, 등록코드가 일치하지 않거나, 이미 다른 사람에게 등록된 경우
+        """
+        # 쿠폰 ID로 쿠폰 조회
+        coupon_data = await self.coupon_repository.find_coupon_by_id_for_register(
+            coupon_id
+        )
+        
+        if coupon_data is None:
+            raise ValueError("ERR-IVD-VALUE")
+        
+        # 등록코드 검증
+        if coupon_data["registration_code"] != registration_code:
+            raise ValueError("ERR-IVD-VALUE")
+        
+        # 이미 다른 사람이 등록한 쿠폰인지 확인
+        if coupon_data["register_id"] is not None:
+            if coupon_data["register_id"] != member_id:
+                raise ValueError("ERR-NOT-YOURS")
+        
+        # 쿠폰 등록
+        await self.coupon_repository.register_coupon(
+            coupon_id=coupon_id,
+            member_id=member_id,
+            registration_code=registration_code,
+            signature_code=signature_code,
+        )
+    
+    async def get_payment_logs_by_member(
+        self,
+        member_id: int,
+        page: int,
+        size: int,
+    ) -> Page[PaymentLogItem]:
+        """
+        회원의 결제된 쿠폰 사용 기록을 조회합니다.
+        
+        Args:
+            member_id: 회원 ID
+            page: 페이지 번호 (1부터 시작)
+            size: 페이지 크기
+            
+        Returns:
+            페이징된 사용 로그 목록
+        """
+        logs_data, total = await self.coupon_repository.find_payment_logs_by_member_id(
+            member_id=member_id,
+            page=page,
+            size=size,
+        )
+        
+        # PaymentLogItem 리스트 생성
+        items = []
+        for log_data in logs_data:
+            coupon_info = PaymentLogCouponInfo(
+                couponId=log_data["coupon_id"],
+                productName=log_data["product_name"],
+                partnerName=log_data["partner_name"],
+                isUsed=True,  # 사용 로그가 있으므로 항상 True
+                createdAt=log_data["created_at"],
+                expiredAt=log_data["expired_at"],
+            )
+            
+            items.append(
+                PaymentLogItem(
+                    useLogId=log_data["use_log_id"],
+                    coupon=coupon_info,
+                    usedAt=log_data["used_at"],
+                )
+            )
+        
+        # fastapi-pagination의 Page 객체 생성
+        return Page(
+            items=items,
+            total=total,
+            page=page,
+            size=size,
+            pages=(total + size - 1) // size if size > 0 else 0,
         )
     
     async def delete_coupons(
@@ -216,7 +355,7 @@ class CouponService:
                     id=coupon_data["coupon_id"],
                     productName=coupon_data["product_name"],
                     partner=partner,
-                    register=register,
+                    register_info=register,  # alias="register"로 인해 JSON에서는 "register"로 표시됨
                     registerLog=register_log,
                     isUsed=False,
                     useLog=None,

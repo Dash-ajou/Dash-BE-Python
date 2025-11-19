@@ -14,6 +14,7 @@ class AuthError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+        print(f"AuthError: {code} {message}")
 
 
 def get_jwt_config() -> Tuple[str, str]:

@@ -34,10 +34,22 @@ async def get_current_user(
             detail="",
         )
     
+    if not credentials.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="",
+        )
+    
     try:
         subject_type, subject_id = verify_access_token_from_env(credentials.credentials)
         return (subject_type, subject_id)
     except AuthError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="",
+        ) from e
+    except Exception as e:
+        # 예상치 못한 에러도 401로 처리
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="",

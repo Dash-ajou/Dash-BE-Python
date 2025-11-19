@@ -80,6 +80,58 @@ class CouponRepositoryPort(Protocol):
             삭제된 쿠폰 중 사용하지 않은 쿠폰의 상세 정보 목록
         """
         ...
+    
+    async def find_payment_logs_by_member_id(
+        self,
+        member_id: int,
+        page: int,
+        size: int,
+    ) -> Tuple[list[dict], int]:
+        """
+        회원 ID로 결제된 쿠폰의 사용 기록을 조회합니다 (페이징 지원).
+        
+        Args:
+            member_id: 회원 ID
+            page: 페이지 번호 (1부터 시작)
+            size: 페이지 크기
+            
+        Returns:
+            (사용 로그 목록, 전체 개수) 튜플
+        """
+        ...
+    
+    async def find_coupon_by_registration_code(
+        self,
+        registration_code: str,
+    ) -> dict | None:
+        """
+        등록코드로 쿠폰을 조회합니다.
+        
+        Args:
+            registration_code: 쿠폰 등록 코드
+            
+        Returns:
+            쿠폰 정보 딕셔너리 또는 None
+        """
+        ...
+    
+    async def register_coupon(
+        self,
+        coupon_id: int,
+        member_id: int,
+        registration_code: str,
+        signature_code: str,
+    ) -> None:
+        """
+        쿠폰을 회원에게 등록합니다.
+        
+        Args:
+            coupon_id: 쿠폰 ID
+            member_id: 회원 ID
+            registration_code: 등록 코드 (검증용)
+            signature_code: 서명 이미지 코드
+        """
+        ...
 
 
 class _SQLRepositoryBase:
@@ -381,4 +433,199 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 return unused_coupons
         
         return await self._run_in_thread(_delete)
+    
+    async def find_payment_logs_by_member_id(
+        self,
+        member_id: int,
+        page: int,
+        size: int,
+    ) -> Tuple[list[dict], int]:
+        """회원 ID로 결제된 쿠폰의 사용 기록을 조회합니다."""
+        def _query():
+            offset = (page - 1) * size
+            
+            with self._session_factory() as session:
+                # 전체 개수 조회 (사용된 쿠폰만, 삭제되지 않은 쿠폰만)
+                count_query = text("""
+                    SELECT COUNT(*) as total
+                    FROM use_logs ul
+                    INNER JOIN coupons c ON ul.coupon_id = c.coupon_id
+                    LEFT JOIN register_logs rl ON c.register_log_id = rl.register_log_id
+                    WHERE c.register_id = :member_id
+                      AND (rl.deleted_at IS NULL OR rl.register_log_id IS NULL)
+                """)
+                count_result = session.execute(count_query, {"member_id": member_id}).fetchone()
+                total = count_result[0] if count_result else 0
+                
+                # 사용 로그 목록 조회 (JOIN으로 쿠폰 정보 포함)
+                query = text("""
+                    SELECT 
+                        ul.use_log_id,
+                        c.coupon_id,
+                        p.product_name,
+                        pu.partner_name,
+                        DATE_FORMAT(c.created_at, '%Y-%m-%d %H:%i:%s') as created_at,
+                        DATE_FORMAT(c.expired_at, '%Y-%m-%d %H:%i:%s') as expired_at,
+                        DATE_FORMAT(ul.used_at, '%Y-%m-%d %H:%i:%s') as used_at
+                    FROM use_logs ul
+                    INNER JOIN coupons c ON ul.coupon_id = c.coupon_id
+                    INNER JOIN products p ON c.product_id = p.product_id
+                    INNER JOIN partner_users pu ON c.partner_id = pu.partner_id
+                    LEFT JOIN register_logs rl ON c.register_log_id = rl.register_log_id
+                    WHERE c.register_id = :member_id
+                      AND (rl.deleted_at IS NULL OR rl.register_log_id IS NULL)
+                    ORDER BY ul.used_at DESC
+                    LIMIT :size OFFSET :offset
+                """)
+                
+                result = session.execute(
+                    query,
+                    {
+                        "member_id": member_id,
+                        "size": size,
+                        "offset": offset,
+                    }
+                ).fetchall()
+                
+                # 결과를 딕셔너리 리스트로 변환
+                logs = []
+                for row in result:
+                    logs.append({
+                        "use_log_id": row[0],
+                        "coupon_id": row[1],
+                        "product_name": row[2],
+                        "partner_name": row[3],
+                        "created_at": row[4],
+                        "expired_at": row[5],
+                        "used_at": row[6],
+                    })
+                
+                return (logs, total)
+        
+        return await self._run_in_thread(_query)
+    
+    async def find_coupon_by_registration_code(
+        self,
+        registration_code: str,
+    ) -> dict | None:
+        """등록코드로 쿠폰을 조회합니다."""
+        def _query():
+            with self._session_factory() as session:
+                query = text("""
+                    SELECT 
+                        c.coupon_id,
+                        c.register_id,
+                        p.product_name,
+                        pu.partner_name,
+                        DATE_FORMAT(c.created_at, '%Y-%m-%d %H:%i:%s') as created_at,
+                        DATE_FORMAT(c.expired_at, '%Y-%m-%d %H:%i:%s') as expired_at
+                    FROM coupons c
+                    INNER JOIN products p ON c.product_id = p.product_id
+                    INNER JOIN partner_users pu ON c.partner_id = pu.partner_id
+                    WHERE c.registration_code = :registration_code
+                    LIMIT 1
+                """)
+                
+                result = session.execute(
+                    query,
+                    {"registration_code": registration_code}
+                ).fetchone()
+                
+                if result is None:
+                    return None
+                
+                return {
+                    "coupon_id": result[0],
+                    "register_id": result[1],
+                    "product_name": result[2],
+                    "partner_name": result[3],
+                    "created_at": result[4],
+                    "expired_at": result[5],
+                }
+        
+        return await self._run_in_thread(_query)
+    
+    async def find_coupon_by_id_for_register(
+        self,
+        coupon_id: int,
+    ) -> dict | None:
+        """쿠폰 등록을 위해 쿠폰 ID로 쿠폰을 조회합니다."""
+        def _query():
+            with self._session_factory() as session:
+                query = text("""
+                    SELECT 
+                        c.coupon_id,
+                        c.registration_code,
+                        c.register_id
+                    FROM coupons c
+                    WHERE c.coupon_id = :coupon_id
+                    LIMIT 1
+                """)
+                
+                result = session.execute(
+                    query,
+                    {"coupon_id": coupon_id}
+                ).fetchone()
+                
+                if result is None:
+                    return None
+                
+                return {
+                    "coupon_id": result[0],
+                    "registration_code": result[1],
+                    "register_id": result[2],
+                }
+        
+        return await self._run_in_thread(_query)
+    
+    async def register_coupon(
+        self,
+        coupon_id: int,
+        member_id: int,
+        registration_code: str,
+        signature_code: str,
+    ) -> None:
+        """쿠폰을 회원에게 등록합니다."""
+        def _register():
+            with self._session_factory() as session:
+                from datetime import datetime, timezone
+                
+                # register_logs에 등록 로그 생성
+                insert_log_query = text("""
+                    INSERT INTO register_logs (register_user_id, registered_at, created_at, updated_at)
+                    VALUES (:register_user_id, :registered_at, :created_at, :updated_at)
+                """)
+                now = datetime.now(timezone.utc)
+                result = session.execute(
+                    insert_log_query,
+                    {
+                        "register_user_id": member_id,
+                        "registered_at": now,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+                register_log_id = result.lastrowid
+                
+                # coupons 테이블 업데이트 (register_id, register_log_id, signature_code)
+                update_query = text("""
+                    UPDATE coupons
+                    SET register_id = :member_id,
+                        register_log_id = :register_log_id,
+                        signature_code = :signature_code
+                    WHERE coupon_id = :coupon_id
+                """)
+                session.execute(
+                    update_query,
+                    {
+                        "member_id": member_id,
+                        "register_log_id": register_log_id,
+                        "signature_code": signature_code,
+                        "coupon_id": coupon_id,
+                    }
+                )
+                
+                session.commit()
+        
+        return await self._run_in_thread(_register)
 

@@ -6,8 +6,16 @@ from libs.common import CurrentUser, security
 
 from services.coupon.app.core.CouponService import CouponService
 from services.coupon.app.dependencies import get_coupon_service
-from services.coupon.app.schemas.request import CouponDeleteSchema
-from services.coupon.app.schemas.response import CouponDetailResponse, CouponListItem
+from services.coupon.app.schemas.request import (
+    CouponAddSchema,
+    CouponDeleteSchema,
+    CouponRegisterSchema,
+)
+from services.coupon.app.schemas.response import (
+    CouponAddResponse,
+    CouponDetailResponse,
+    CouponListItem,
+)
 
 # 쿠폰 기본 CRUD 라우터
 router = APIRouter(prefix="/coupons", tags=["Coupons"])
@@ -116,35 +124,126 @@ async def get_coupon(
             )
 
 
-@router.post("/add")
+@router.post("/add", response_model=CouponAddResponse, status_code=status.HTTP_200_OK)
 async def add_coupon(
+    payload: CouponAddSchema,
     current_user: CurrentUser,
+    coupon_service: CouponService = Depends(get_coupon_service),
 ):
     """
-    새로운 쿠폰을 추가합니다.
+    쿠폰을 등록하기 위한 등록코드로 쿠폰 정보를 조회합니다.
     
     **Headers:**
     - `Authorization`: Bearer {access_token} (필수)
     
-    **Response:**
-    - HTTP 201 Created: 쿠폰 생성 성공
-    - HTTP 401 Unauthorized: 인증 실패
-    - HTTP 400 Bad Request: 잘못된 요청
+    **Request Body:**
+    - `registrationCode`: 쿠폰 등록 코드
     
-    **Example:**
-    ```python
-    # current_user는 (subject_type, subject_id) 튜플입니다.
-    subject_type, subject_id = current_user
-    ```
+    **Response:**
+    - HTTP 200 OK: 쿠폰 정보 반환
+    - HTTP 400 Bad Request: 유효하지 않은 등록코드 (ERR-IVD-VALUE)
+    - HTTP 401 Unauthorized: 인증 실패
+    - HTTP 403 Forbidden: 이미 다른 사람에게 등록된 쿠폰 (ERR-NOT-YOURS)
+    
+    **참고:**
+    - 이 엔드포인트는 쿠폰 정보를 조회만 하며, 실제 등록은 수행하지 않습니다.
     """
-    # 공통 인증 모듈을 통해 자동으로 검증됨
     subject_type, subject_id = current_user
-    # TODO: 쿠폰 생성 로직 구현
-    return {
-        "message": "쿠폰 추가 API - 구현 예정",
-        "user_type": subject_type,
-        "user_id": subject_id,
-    }
+    
+    # 개인회원만 조회 가능
+    if subject_type != "member":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="개인회원만 쿠폰 정보를 조회할 수 있습니다.",
+        )
+    
+    try:
+        # 등록코드로 쿠폰 정보 조회
+        result = await coupon_service.get_coupon_by_registration_code(
+            registration_code=payload.registrationCode,
+            member_id=subject_id,
+        )
+        return result
+    except ValueError as e:
+        error_code = str(e)
+        if error_code == "ERR-NOT-YOURS":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "ERR-NOT-YOURS"},
+            )
+        elif error_code == "ERR-IVD-VALUE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "ERR-IVD-VALUE"},
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "ERR-IVD-VALUE"},
+            )
+
+
+@router.post("/add/{coupon_id}", status_code=status.HTTP_200_OK)
+async def register_coupon(
+    coupon_id: int,
+    payload: CouponRegisterSchema,
+    current_user: CurrentUser,
+    coupon_service: CouponService = Depends(get_coupon_service),
+):
+    """
+    쿠폰을 로그인된 계정에 등록합니다.
+    
+    **Path Parameters:**
+    - `coupon_id`: 등록할 쿠폰 ID
+    
+    **Headers:**
+    - `Authorization`: Bearer {access_token} (필수)
+    
+    **Request Body:**
+    - `registrationCode`: 쿠폰 등록 코드
+    - `signatureCode`: 서명 이미지 코드
+    
+    **Response:**
+    - HTTP 200 OK: 쿠폰 등록 성공 (빈 응답)
+    - HTTP 400 Bad Request: 유효하지 않은 등록코드 또는 서명 이미지 코드 (ERR-IVD-VALUE)
+    - HTTP 401 Unauthorized: 인증 실패
+    - HTTP 403 Forbidden: 이미 다른 사람에게 등록된 쿠폰 (ERR-NOT-YOURS)
+    """
+    subject_type, subject_id = current_user
+    
+    # 개인회원만 등록 가능
+    if subject_type != "member":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="개인회원만 쿠폰을 등록할 수 있습니다.",
+        )
+    
+    try:
+        # 쿠폰 등록
+        await coupon_service.register_coupon(
+            coupon_id=coupon_id,
+            registration_code=payload.registrationCode,
+            signature_code=payload.signatureCode,
+            member_id=subject_id,
+        )
+        return Response(status_code=status.HTTP_200_OK)
+    except ValueError as e:
+        error_code = str(e)
+        if error_code == "ERR-NOT-YOURS":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "ERR-NOT-YOURS"},
+            )
+        elif error_code == "ERR-IVD-VALUE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "ERR-IVD-VALUE"},
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "ERR-IVD-VALUE"},
+            )
 
 
 @router.delete("", status_code=status.HTTP_200_OK)
