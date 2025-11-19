@@ -61,7 +61,31 @@ def _clear_login_request_cookie(response: Response) -> None:
     )
     response.headers["clear-cookie"] = "LOGIN-REQUEST-HASH"
 
-@router.post("/login/phone", response_model=LoginResponse)
+@router.post(
+    "/login/phone",
+    response_model=LoginResponse,
+    responses={
+        200: {
+            "description": "로그인 성공",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                        "userName": "홍길동"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "로그인 실패",
+            "content": {
+                "application/json": {
+                    "example": {"code": "ERR-IVD-PARAM"}
+                }
+            }
+        }
+    }
+)
 async def login_member_with_phone(
     response: Response,
     payload: MemberLoginSchema | None = Body(default=None),
@@ -73,6 +97,10 @@ async def login_member_with_phone(
     개인회원 로그인 (인증번호)
     
     사용: [P_OB-2] 로그인
+    
+    **응답 형식:**
+    - `accessToken`: JWT 액세스 토큰
+    - `userName`: 사용자 이름 (개인회원의 경우 memberName)
     """
     del login_request_hash  # cookie는 인증 완료 단계에서만 사용, 로그인에서는 제거 대상
 
@@ -93,9 +121,33 @@ async def login_member_with_phone(
     _set_refresh_cookie(response, tokens.refresh_token, tokens.refresh_expires_at)
     _clear_login_request_cookie(response)
 
-    return LoginResponse(accessToken=tokens.access_token)
+    return LoginResponse(accessToken=tokens.access_token, userName=tokens.user_name)
 
-@router.post("/login/pin", response_model=LoginResponse)
+@router.post(
+    "/login/pin",
+    response_model=LoginResponse,
+    responses={
+        200: {
+            "description": "로그인 성공",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                        "userName": "파트너 업체명"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "로그인 실패",
+            "content": {
+                "application/json": {
+                    "example": {"code": "ERR-IVD-PARAM"}
+                }
+            }
+        }
+    }
+)
 async def login_partner_with_pin(
     response: Response,
     payload: PartnerLoginSchema | None = Body(default=None),
@@ -107,6 +159,10 @@ async def login_partner_with_pin(
     파트너회원 로그인 (PIN)
     
     사용: [P_OB-2] 로그인
+    
+    **응답 형식:**
+    - `accessToken`: JWT 액세스 토큰
+    - `userName`: 사용자 이름 (파트너의 경우 partnerName)
     """
     del login_request_hash
 
@@ -129,4 +185,4 @@ async def login_partner_with_pin(
     _set_refresh_cookie(response, tokens.refresh_token, tokens.refresh_expires_at)
     _clear_login_request_cookie(response)
 
-    return LoginResponse(accessToken=tokens.access_token)
+    return LoginResponse(accessToken=tokens.access_token, userName=tokens.user_name)

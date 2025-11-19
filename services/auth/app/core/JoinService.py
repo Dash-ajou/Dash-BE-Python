@@ -85,7 +85,14 @@ class JoinService:
         if not self.login_service:
             raise JoinError("ERR-INTERNAL", "로그인 서비스가 설정되지 않았습니다.")
 
-        return await self.login_service._issue_tokens(member_id, self.SUBJECT_MEMBER)
+        # 사용자 정보 조회 (이름 포함)
+        if not self.member_repository:
+            raise JoinError("ERR-INTERNAL", "회원 저장소가 설정되지 않았습니다.")
+        member = await self.member_repository.find_member_by_id(member_id)
+        if member is None:
+            raise JoinError("ERR-INTERNAL", "회원 정보를 찾을 수 없습니다.")
+
+        return await self.login_service._issue_tokens(member_id, self.SUBJECT_MEMBER, member.memberName)
 
     async def join_partner(
         self,
@@ -121,7 +128,14 @@ class JoinService:
         if not self.login_service:
             raise JoinError("ERR-INTERNAL", "로그인 서비스가 설정되지 않았습니다.")
 
-        return await self.login_service._issue_tokens(partner_id, self.SUBJECT_PARTNER)
+        # 사용자 정보 조회 (이름 포함)
+        if not self.partner_repository:
+            raise JoinError("ERR-INTERNAL", "파트너 저장소가 설정되지 않았습니다.")
+        partner = await self.partner_repository.find_partner_by_id(partner_id)
+        if partner is None:
+            raise JoinError("ERR-INTERNAL", "파트너 정보를 찾을 수 없습니다.")
+
+        return await self.login_service._issue_tokens(partner_id, self.SUBJECT_PARTNER, partner.partnerName)
 
     async def _consume_phone_token(self, phone_auth_token: str) -> str:
         try:

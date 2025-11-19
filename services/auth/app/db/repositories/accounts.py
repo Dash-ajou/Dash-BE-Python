@@ -158,6 +158,25 @@ class SQLAlchemyMemberRepository(_SQLRepositoryBase):
 
         return await self._run_in_thread(_query)
 
+    async def update_phone(self, account_id: int, new_phone: str) -> None:
+        """회원의 전화번호를 업데이트합니다."""
+        def _update():
+            with self._session_factory() as session:
+                session.execute(
+                    text(
+                        """
+                        UPDATE phones
+                        SET number = :new_phone
+                        WHERE contact_account_type = 'MEMBER'
+                          AND account_id = :account_id
+                        """
+                    ),
+                    {"new_phone": new_phone, "account_id": account_id},
+                )
+                session.commit()
+
+        return await self._run_in_thread(_update)
+
     async def create_member(
         self, member_name: str, member_birth: str, phone: str, group_ids: list[str] | None = None
     ) -> int:
@@ -259,6 +278,25 @@ class SQLAlchemyPartnerRepository(_SQLRepositoryBase):
                 )
 
         return await self._run_in_thread(_query)
+
+    async def update_phone(self, account_id: int, new_phone: str) -> None:
+        """파트너의 전화번호를 업데이트합니다."""
+        def _update():
+            with self._session_factory() as session:
+                session.execute(
+                    text(
+                        """
+                        UPDATE phones
+                        SET number = :new_phone
+                        WHERE contact_account_type = 'PARTNER'
+                          AND account_id = :account_id
+                        """
+                    ),
+                    {"new_phone": new_phone, "account_id": account_id},
+                )
+                session.commit()
+
+        return await self._run_in_thread(_update)
 
     async def create_partner(
         self, user_name: str, partner_name: str, phone: str, pin_hash: str

@@ -7,3 +7,4 @@ pydantic-settings
 fastapi-pagination
 gunicorn
 solapi
+PyJWT

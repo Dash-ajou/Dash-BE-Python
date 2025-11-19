@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+users_router = APIRouter(tags=["Users"])
 
 
 def _load_module(module_path: Path) -> Optional[ModuleType]:
@@ -29,4 +30,8 @@ for router_file in v1_dir.glob("*.router.py"):
 
     sub_router = getattr(module, "router", None)
     if isinstance(sub_router, APIRouter):
-        router.include_router(sub_router)
+        # users.router.py는 별도로 처리
+        if router_file.name == "users.router.py":
+            users_router.include_router(sub_router)
+        else:
+            router.include_router(sub_router)

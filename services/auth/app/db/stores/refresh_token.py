@@ -15,6 +15,7 @@ class SQLRefreshTokenStore(RefreshTokenStorePort):
     async def save_token(self, entry: RefreshTokenEntry) -> None:
         def _save():
             with self._session_factory() as session:
+                # access_token이 있으면 함께 저장
                 session.execute(
                     text(
                         """
@@ -23,18 +24,21 @@ class SQLRefreshTokenStore(RefreshTokenStorePort):
                             subject_type,
                             subject_id,
                             expires_at,
+                            access_token,
                             created_at
                         ) VALUES (
                             :token,
                             :subject_type,
                             :subject_id,
                             :expires_at,
+                            :access_token,
                             :created_at
                         )
                         ON DUPLICATE KEY UPDATE
                             subject_type = VALUES(subject_type),
                             subject_id = VALUES(subject_id),
                             expires_at = VALUES(expires_at),
+                            access_token = VALUES(access_token),
                             created_at = VALUES(created_at)
                         """
                     ),
@@ -43,6 +47,7 @@ class SQLRefreshTokenStore(RefreshTokenStorePort):
                         "subject_type": entry.subject_type,
                         "subject_id": entry.subject_id,
                         "expires_at": entry.expires_at,
+                        "access_token": entry.access_token,
                         "created_at": datetime.now(timezone.utc),
                     },
                 )
@@ -57,7 +62,7 @@ class SQLRefreshTokenStore(RefreshTokenStorePort):
                     session.execute(
                         text(
                             """
-                            SELECT subject_type, subject_id, expires_at
+                            SELECT subject_type, subject_id, expires_at, access_token
                             FROM auth_refresh_tokens
                             WHERE token = :token
                             LIMIT 1
@@ -83,9 +88,43 @@ class SQLRefreshTokenStore(RefreshTokenStorePort):
                     subject_id=row["subject_id"],
                     token=token,
                     expires_at=expires_at,
+                    access_token=row.get("access_token"),
                 )
 
         return await asyncio.to_thread(_consume)
+    
+    async def find_by_access_token(self, access_token: str) -> RefreshTokenEntry | None:
+        def _find():
+            with self._session_factory() as session:
+                row = (
+                    session.execute(
+                        text(
+                            """
+                            SELECT token, subject_type, subject_id, expires_at, access_token
+                            FROM auth_refresh_tokens
+                            WHERE access_token = :access_token
+                            LIMIT 1
+                            """
+                        ),
+                        {"access_token": access_token},
+                    )
+                    .mappings()
+                    .first()
+                )
+                if row is None:
+                    return None
+                expires_at = row["expires_at"]
+                if expires_at and expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                return RefreshTokenEntry(
+                    subject_type=row["subject_type"],
+                    subject_id=row["subject_id"],
+                    token=row["token"],
+                    expires_at=expires_at,
+                    access_token=row.get("access_token"),
+                )
+
+        return await asyncio.to_thread(_find)
 
     async def revoke_subject_tokens(self, subject_type: str, subject_id: int) -> None:
         def _delete():

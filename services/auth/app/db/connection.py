@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     SOLAPI_API_KEY: str = ""  # SOLAPI API Key
     SOLAPI_API_SECRET: str = ""  # SOLAPI API Secret
     SOLAPI_SENDER_NUMBER: str = ""  # 발신번호 (01000000000 형식, (-) 제외)
+    
+    # JWT 설정
+    JWT_SECRET_KEY: str = "change-me-in-production"  # JWT 서명에 사용할 시크릿 키
+    JWT_ALGORITHM: str = "HS256"  # JWT 알고리즘
 
     class Config:
         # 루트 디렉터리의 .env 파일을 읽도록 경로 수정

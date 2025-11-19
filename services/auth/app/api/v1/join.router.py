@@ -47,7 +47,32 @@ def _not_implemented(feature_name: str):
     )
 
 
-@router.post("/join/member", response_model=JoinResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/join/member",
+    response_model=JoinResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        201: {
+            "description": "회원가입 성공",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                        "userName": "홍길동"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "회원가입 실패",
+            "content": {
+                "application/json": {
+                    "example": {"code": "ERR-DUP-VALUE"}
+                }
+            }
+        }
+    }
+)
 async def join_member(
     payload: MemberJoinSchema,
     response: Response,
@@ -57,6 +82,10 @@ async def join_member(
     회원가입 (개인회원)
     
     사용: [P_OB-3] 회원가입
+    
+    **응답 형식:**
+    - `accessToken`: JWT 액세스 토큰
+    - `userName`: 사용자 이름 (개인회원의 경우 memberName)
     """
     try:
         tokens = await join_service.join_member(
@@ -81,10 +110,35 @@ async def join_member(
     # 회원가입 시 LOGIN-REQUEST-HASH 쿠키가 있을 수 있으므로 정리 (로그인과 동일)
     _clear_login_request_cookie(response)
 
-    return JoinResponse(accessToken=tokens.access_token)
+    return JoinResponse(accessToken=tokens.access_token, userName=tokens.user_name)
 
 
-@router.post("/join/partner", response_model=JoinResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/join/partner",
+    response_model=JoinResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        201: {
+            "description": "회원가입 성공",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                        "userName": "파트너 업체명"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "회원가입 실패",
+            "content": {
+                "application/json": {
+                    "example": {"code": "ERR-DUP-VALUE"}
+                }
+            }
+        }
+    }
+)
 async def join_partner(
     payload: PartnerJoinSchema,
     response: Response,
@@ -94,6 +148,10 @@ async def join_partner(
     회원가입 (파트너)
     
     사용: [P_OB-3] 회원가입
+    
+    **응답 형식:**
+    - `accessToken`: JWT 액세스 토큰
+    - `userName`: 사용자 이름 (파트너의 경우 partnerName)
     """
     try:
         tokens = await join_service.join_partner(
@@ -118,5 +176,5 @@ async def join_partner(
     # 회원가입 시 LOGIN-REQUEST-HASH 쿠키가 있을 수 있으므로 정리 (로그인과 동일)
     _clear_login_request_cookie(response)
 
-    return JoinResponse(accessToken=tokens.access_token)
+    return JoinResponse(accessToken=tokens.access_token, userName=tokens.user_name)
 
