@@ -667,10 +667,14 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 if subject_type == "member":
                     # 개인사용자: vendor_id가 member_id와 일치하는 경우
                     where_conditions.append("il.vendor_id = :subject_id")
+                    # 벤더가 삭제하지 않은 이슈만 조회 (soft delete 필터링)
+                    where_conditions.append("il.vendor_deleted_at IS NULL")
                     params["subject_id"] = subject_id
                 elif subject_type == "partner":
                     # 파트너사용자: partner_id가 일치하는 경우
                     where_conditions.append("il.partner_id = :subject_id")
+                    # 파트너가 삭제하지 않은 이슈만 조회 (soft delete 필터링)
+                    where_conditions.append("il.partner_deleted_at IS NULL")
                     params["subject_id"] = subject_id
                 else:
                     # 알 수 없는 타입은 빈 결과 반환
@@ -752,98 +756,114 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
         def _delete():
             with self._session_factory() as session:
                 from libs.common import now_kst
-                
-                # 이슈 정보 조회 (권한 확인 및 상태 확인용)
-                query = text("""
-                    SELECT 
-                        il.issue_id,
-                        il.vendor_id,
-                        il.partner_id,
-                        il.status
-                    FROM issue_logs il
-                    WHERE il.issue_id IN :issue_ids
-                """)
-                
-                issues = session.execute(
-                    query,
-                    {"issue_ids": tuple(issue_ids)}
-                ).fetchall()
-                
-                if not issues:
-                    return ([], issue_ids)
-                
-                # 권한 확인 및 상태별 처리
-                valid_issue_ids = []
-                invalid_issue_ids = []
-                issues_to_delete_completely = []  # 완전 삭제할 이슈
-                issues_to_soft_delete_vendor = []  # 벤더측에서만 삭제할 이슈
-                issues_to_soft_delete_partner = []  # 파트너측에서만 삭제할 이슈
-                issues_to_reject_and_delete = []  # 거절 처리 후 삭제할 이슈
-                
-                # 승인 이전 상태 목록
-                pending_statuses = ["ISSUE_STATUS/PENDING", "ISSUE_STATUS/PAYMENT_READY"]
-                # 승인 이후 상태 목록
-                approved_statuses = ["ISSUE_STATUS/ISSUED", "ISSUE_STATUS/SHARED", "ISSUE_STATUS/COMPLETED"]
-                
-                for issue in issues:
-                    issue_id, vendor_id, partner_id, status = issue
-                    
-                    # 권한 확인
-                    has_permission = False
-                    if subject_type == "member":
-                        # 개인사용자: vendor_id가 member_id와 일치하는 경우
-                        has_permission = (vendor_id == subject_id)
-                    elif subject_type == "partner":
-                        # 파트너사용자: partner_id가 일치하는 경우
-                        has_permission = (partner_id == subject_id)
-                    
-                    if not has_permission:
-                        invalid_issue_ids.append(issue_id)
-                        continue
-                    
-                    valid_issue_ids.append(issue_id)
-                    
-                    # 상태와 요청자에 따라 처리 분기
-                    if subject_type == "member":
-                        # 벤더가 호출한 경우
-                        if status in pending_statuses:
-                            # 파트너 승인 이전: 파트너와 벤더측 모두에서 삭제 (=DB에서 삭제)
-                            issues_to_delete_completely.append(issue_id)
-                        elif status in approved_statuses:
-                            # 파트너 승인 이후: 벤더측에서만 삭제
-                            issues_to_soft_delete_vendor.append(issue_id)
-                    elif subject_type == "partner":
-                        # 파트너가 호출한 경우
-                        if status in pending_statuses:
-                            # 승인 이전: 벤더측에서는 거절로 처리되고 파트너측에서만 삭제
-                            issues_to_reject_and_delete.append(issue_id)
-                        elif status in approved_statuses:
-                            # 승인 이후: 파트너측에서만 삭제
-                            issues_to_soft_delete_partner.append(issue_id)
-                
-                now = now_kst()
-                
-                # 1. 완전 삭제 (벤더요청, 파트너 승인 이전)
-                if issues_to_delete_completely:
-                    delete_query = text("""
-                        DELETE FROM issue_logs
-                        WHERE issue_id IN :issue_ids
+                try:
+                    # 이슈 정보 조회 (권한 확인 및 상태 확인용)
+                    # 이미 삭제된 이슈는 제외하고 조회
+                    query = text("""
+                        SELECT 
+                            il.issue_id,
+                            il.vendor_id,
+                            il.partner_id,
+                            il.status,
+                            il.vendor_deleted_at,
+                            il.partner_deleted_at
+                        FROM issue_logs il
+                        WHERE il.issue_id IN :issue_ids
                     """)
-                    session.execute(
-                        delete_query,
-                        {"issue_ids": tuple(issues_to_delete_completely)}
-                    )
-                
-                # 2. 벤더측에서만 삭제 (벤더요청, 파트너 승인 이후)
-                # vendor_deleted_at 필드가 있다고 가정 (없으면 마이그레이션 필요)
-                if issues_to_soft_delete_vendor:
-                    # 일단 vendor_deleted_at 필드가 있다고 가정하고 구현
-                    # 실제로는 마이그레이션이 필요할 수 있음
-                    try:
+                    
+                    issues = session.execute(
+                        query,
+                        {"issue_ids": tuple(issue_ids)}
+                    ).fetchall()
+                    
+                    # 조회된 이슈 ID와 요청된 이슈 ID 비교
+                    found_issue_ids = {issue[0] for issue in issues}
+                    not_found_issue_ids = [issue_id for issue_id in issue_ids if issue_id not in found_issue_ids]
+                    
+                    # 존재하지 않는 이슈는 invalid로 처리하지 않고 별도로 관리
+                    # (존재하지 않는 이슈는 무시하고, 권한이 없는 이슈만 에러 처리)
+                    
+                    # 권한 확인 및 상태별 처리
+                    valid_issue_ids = []
+                    invalid_issue_ids = []
+                    issues_to_delete_completely = []  # 완전 삭제할 이슈
+                    issues_to_soft_delete_vendor = []  # 벤더측에서만 삭제할 이슈
+                    issues_to_soft_delete_partner = []  # 파트너측에서만 삭제할 이슈
+                    issues_to_reject_and_delete = []  # 거절 처리 후 삭제할 이슈
+                    
+                    # 승인 이전 상태 목록
+                    pending_statuses = ["ISSUE_STATUS/PENDING", "ISSUE_STATUS/PAYMENT_READY"]
+                    # 승인 이후 상태 목록
+                    approved_statuses = ["ISSUE_STATUS/ISSUED", "ISSUE_STATUS/SHARED", "ISSUE_STATUS/COMPLETED"]
+                    
+                    for issue in issues:
+                        issue_id, vendor_id, partner_id, status, vendor_deleted_at, partner_deleted_at = issue
+                        
+                        # 이미 삭제된 이슈인지 확인
+                        if subject_type == "member":
+                            # 개인사용자: vendor_deleted_at이 이미 설정되어 있으면 이미 삭제된 것
+                            if vendor_deleted_at is not None:
+                                # 이미 삭제된 이슈는 무시 (invalid로 처리하지 않음)
+                                continue
+                        elif subject_type == "partner":
+                            # 파트너사용자: partner_deleted_at이 이미 설정되어 있으면 이미 삭제된 것
+                            if partner_deleted_at is not None:
+                                # 이미 삭제된 이슈는 무시 (invalid로 처리하지 않음)
+                                continue
+                        
+                        # 권한 확인
+                        has_permission = False
+                        if subject_type == "member":
+                            # 개인사용자: vendor_id가 member_id와 일치하는 경우
+                            has_permission = (vendor_id == subject_id)
+                        elif subject_type == "partner":
+                            # 파트너사용자: partner_id가 일치하는 경우
+                            has_permission = (partner_id == subject_id)
+                        
+                        if not has_permission:
+                            invalid_issue_ids.append(issue_id)
+                            continue
+                        
+                        valid_issue_ids.append(issue_id)
+                        
+                        # 상태와 요청자에 따라 처리 분기
+                        if subject_type == "member":
+                            # 벤더가 호출한 경우
+                            if status in pending_statuses:
+                                # 파트너 승인 이전: 파트너와 벤더측 모두에서 삭제 (=DB에서 삭제)
+                                issues_to_delete_completely.append(issue_id)
+                            elif status in approved_statuses:
+                                # 파트너 승인 이후: 벤더측에서만 삭제
+                                issues_to_soft_delete_vendor.append(issue_id)
+                        elif subject_type == "partner":
+                            # 파트너가 호출한 경우
+                            if status in pending_statuses:
+                                # 승인 이전: 벤더측에서는 거절로 처리되고 파트너측에서만 삭제
+                                issues_to_reject_and_delete.append(issue_id)
+                            elif status in approved_statuses:
+                                # 승인 이후: 파트너측에서만 삭제
+                                issues_to_soft_delete_partner.append(issue_id)
+                    
+                    now = now_kst()
+                    
+                    # 1. 완전 삭제 (벤더요청, 파트너 승인 이전)
+                    if issues_to_delete_completely:
+                        delete_query = text("""
+                            DELETE FROM issue_logs
+                            WHERE issue_id IN :issue_ids
+                        """)
+                        session.execute(
+                            delete_query,
+                            {"issue_ids": tuple(issues_to_delete_completely)}
+                        )
+                    
+                    # 2. 벤더측에서만 삭제 (벤더요청, 파트너 승인 이후)
+                    if issues_to_soft_delete_vendor:
                         update_query = text("""
                             UPDATE issue_logs
                             SET vendor_deleted_at = :deleted_at
                             WHERE issue_id IN :issue_ids
+                              AND vendor_deleted_at IS NULL
                         """)
                         session.execute(
                             update_query,
@@ -852,18 +872,14 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                                 "issue_ids": tuple(issues_to_soft_delete_vendor)
                             }
                         )
-                    except Exception:
-                        # 필드가 없으면 일단 무시 (나중에 마이그레이션 추가 필요)
-                        pass
-                
-                # 3. 파트너측에서만 삭제 (파트너요청, 승인 이후)
-                # partner_deleted_at 필드가 있다고 가정 (없으면 마이그레이션 필요)
-                if issues_to_soft_delete_partner:
-                    try:
+                    
+                    # 3. 파트너측에서만 삭제 (파트너요청, 승인 이후)
+                    if issues_to_soft_delete_partner:
                         update_query = text("""
                             UPDATE issue_logs
                             SET partner_deleted_at = :deleted_at
                             WHERE issue_id IN :issue_ids
+                              AND partner_deleted_at IS NULL
                         """)
                         session.execute(
                             update_query,
@@ -872,20 +888,17 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                                 "issue_ids": tuple(issues_to_soft_delete_partner)
                             }
                         )
-                    except Exception:
-                        # 필드가 없으면 일단 무시 (나중에 마이그레이션 추가 필요)
-                        pass
-                
-                # 4. 거절 처리 후 삭제 (파트너요청, 승인 이전)
-                if issues_to_reject_and_delete:
-                    # status를 REJECTED로 변경하고 partner_deleted_at 설정
-                    try:
+                    
+                    # 4. 거절 처리 후 삭제 (파트너요청, 승인 이전)
+                    if issues_to_reject_and_delete:
+                        # status를 REJECTED로 변경하고 partner_deleted_at 설정
                         update_query = text("""
                             UPDATE issue_logs
                             SET status = 'ISSUE_STATUS/REJECTED',
                                 partner_deleted_at = :deleted_at,
                                 decided_at = :decided_at
                             WHERE issue_id IN :issue_ids
+                              AND partner_deleted_at IS NULL
                         """)
                         session.execute(
                             update_query,
@@ -895,24 +908,14 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                                 "issue_ids": tuple(issues_to_reject_and_delete)
                             }
                         )
-                    except Exception:
-                        # 필드가 없으면 status만 변경
-                        update_query = text("""
-                            UPDATE issue_logs
-                            SET status = 'ISSUE_STATUS/REJECTED',
-                                decided_at = :decided_at
-                            WHERE issue_id IN :issue_ids
-                        """)
-                        session.execute(
-                            update_query,
-                            {
-                                "decided_at": now,
-                                "issue_ids": tuple(issues_to_reject_and_delete)
-                            }
-                        )
-                
-                session.commit()
-                return (valid_issue_ids, invalid_issue_ids)
+                    
+                    session.commit()
+                    return (valid_issue_ids, invalid_issue_ids)
+                except Exception as e:
+                    # 예외 발생 시 롤백
+                    session.rollback()
+                    # 예외를 다시 발생시켜 상위에서 처리하도록 함
+                    raise
         
         return await self._run_in_thread(_delete)
     
