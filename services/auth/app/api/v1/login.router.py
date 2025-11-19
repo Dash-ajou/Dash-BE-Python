@@ -110,12 +110,12 @@ async def login_partner_with_pin(
     """
     del login_request_hash
 
-    phone_auth_token = payload.phoneAuthToken if payload else None
+    phone_number = payload.phoneNumber if payload else None
     pin_hash = payload.pin if payload else None
 
     try:
         tokens = await login_service.login_partner(
-            phone_auth_token=phone_auth_token,
+            phone=phone_number,
             pin_hash=pin_hash,
             refresh_token=refresh_token,
         )

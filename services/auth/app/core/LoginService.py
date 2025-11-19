@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -143,29 +144,30 @@ class LoginService:
 
     async def login_partner(
         self,
-        phone_auth_token: str | None,
+        phone: str | None,
         pin_hash: str | None,
         refresh_token: str | None,
     ) -> LoginTokens:
-        if phone_auth_token:
-            phone = await self._consume_phone_token(phone_auth_token)
-            partner = await self.partner_repository.find_partner_by_phone(phone)
+        if phone:
+            # 전화번호 정규화
+            normalized_phone = self._normalize_phone(phone)
+            partner = await self.partner_repository.find_partner_by_phone(normalized_phone)
             if partner is None:
                 raise LoginError("ERR-IVD-PARAM", "등록되지 않은 파트너입니다.")
             
-            # PIN 검증이 필요한 경우 (phone_auth_token과 pin_hash가 함께 전달된 경우)
+            # PIN 검증이 필요한 경우 (phone과 pin_hash가 함께 전달된 경우)
             if pin_hash:
                 # pin_hash를 phone을 key로 사용하여 암호화 후 검증
-                encrypted_pin_hash = self._encrypt_pin_with_phone(pin_hash, phone)
+                encrypted_pin_hash = self._encrypt_pin_with_phone(pin_hash, normalized_phone)
                 verified_partner_id = await self._verify_partner_pin(encrypted_pin_hash)
                 if verified_partner_id != partner.partnerId:
                     raise LoginError("ERR-IVD-PARAM", "PIN이 유효하지 않습니다.")
             
             partner_id = partner.partnerId
         elif pin_hash:
-            # phone_auth_token 없이 pin_hash만 있는 경우는 지원하지 않음
+            # phone 없이 pin_hash만 있는 경우는 지원하지 않음
             # (phone 정보가 필요하므로)
-            raise LoginError("ERR-IVD-PARAM", "PIN 검증을 위해서는 휴대폰 인증이 필요합니다.")
+            raise LoginError("ERR-IVD-PARAM", "PIN 검증을 위해서는 휴대폰 번호가 필요합니다.")
         else:
             partner_id = await self._consume_refresh_token(
                 refresh_token, self.SUBJECT_PARTNER
@@ -261,6 +263,23 @@ class LoginService:
         if partner_id is None:
             raise LoginError("ERR-IVD-PARAM", "PIN이 유효하지 않습니다.")
         return partner_id
+
+    @staticmethod
+    def _normalize_phone(raw_phone: str) -> str:
+        """
+        전화번호를 정규화합니다 (숫자만 추출).
+        PhoneService와 동일한 로직 사용
+        
+        Args:
+            raw_phone: 정규화할 전화번호
+            
+        Returns:
+            정규화된 전화번호 (숫자만)
+        """
+        digits = re.sub(r"\D", "", raw_phone or "")
+        if not digits:
+            raise ValueError("휴대폰 번호가 유효하지 않습니다.")
+        return digits
 
     @staticmethod
     def _encrypt_pin_with_phone(pin_hash: str, phone: str) -> str:
