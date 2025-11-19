@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Protocol
 
 from libs.schemas import Member, PartnerUser
+from services.auth.app.db.connection import settings
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ class PhoneService:
         account_lookup: PhoneAccountLookupPort | None = None,
         verification_store: PhoneVerificationStorePort | None = None,
         phone_auth_store: PhoneAuthTokenStorePort | None = None,
-        sms_sender: Callable[[str], None] | None = None,
+        sms_sender: Callable[[str, str], None] | None = None,
     ):
         self.account_lookup = account_lookup or NullPhoneAccountRepository()
         self.verification_store = verification_store or InMemoryPhoneVerificationStore()
@@ -180,9 +181,9 @@ class PhoneService:
 
     def _send_auth_message(self, normalized_phone: str, code: str) -> None:
         masked_phone = self._mask_phone(normalized_phone)
-        content = f"[Dash] 인증번호 {code} (요청 번호: {masked_phone})"
+        content = f"[Dash] 인증번호: {code}"
         logger.debug("Sending verification SMS to %s", masked_phone)
-        self._sms_sender(content)
+        self._sms_sender(normalized_phone, content)
 
     @staticmethod
     def _normalize_phone(raw_phone: str) -> str:
@@ -219,12 +220,68 @@ class PhoneService:
         return f"{phone[:-4]}****"
 
 
-def sendMessage(content: str) -> None:
+def sendMessage(phone: str, content: str) -> None:
     """
-    실제 문자 발송 로직 대신 호출되는 더미 함수.
+    SOLAPI를 사용하여 SMS를 발송하는 함수.
+    
+    Args:
+        phone: 수신번호 (01000000000 형식, (-) 제외)
+        content: 발송할 메시지 내용
     """
-
-    logger.info("[SMS] %s", content)
+    try:
+        # SOLAPI 패키지 import (선택적 import로 패키지가 없어도 동작하도록)
+        from solapi import SolapiMessageService
+        from solapi.model import RequestMessage
+        
+        # 환경 변수에서 API 키와 Secret 가져오기
+        api_key = settings.SOLAPI_API_KEY
+        api_secret = settings.SOLAPI_API_SECRET
+        sender_number = settings.SOLAPI_SENDER_NUMBER
+        
+        # 환경 변수가 설정되지 않은 경우 로그만 출력
+        if not api_key or not api_secret or not sender_number:
+            logger.warning(
+                "[SMS] SOLAPI 설정이 완료되지 않았습니다. 환경 변수를 확인하세요. "
+                "(SOLAPI_API_KEY, SOLAPI_API_SECRET, SOLAPI_SENDER_NUMBER)"
+            )
+            logger.info("[SMS] 수신번호: %s, 내용: %s", phone, content)
+            return
+        
+        # SOLAPI 메시지 서비스 초기화
+        message_service = SolapiMessageService(
+            api_key=api_key,
+            api_secret=api_secret
+        )
+        
+        # 메시지 모델 생성
+        message = RequestMessage(
+            from_=sender_number,  # 발신번호 (등록된 발신번호만 사용 가능)
+            to=phone,  # 수신번호 (01000000000 형식)
+            text=content,  # 메시지 내용
+        )
+        
+        # 메시지 발송
+        response = message_service.send(message)
+        
+        logger.info(
+            "[SMS] 메시지 발송 성공 - 수신번호: %s, Group ID: %s, 성공: %d, 실패: %d",
+            phone,
+            response.group_info.group_id,
+            response.group_info.count.registered_success,
+            response.group_info.count.registered_failed,
+        )
+        
+    except ImportError:
+        # solapi 패키지가 설치되지 않은 경우
+        logger.warning(
+            "[SMS] solapi 패키지가 설치되지 않았습니다. 'pip install solapi'를 실행하세요."
+        )
+        logger.info("[SMS] 수신번호: %s, 내용: %s", phone, content)
+    except Exception as e:
+        # SMS 발송 실패 시 로그 출력
+        logger.error("[SMS] 메시지 발송 실패 - 수신번호: %s, 오류: %s", phone, str(e))
+        # 프로덕션 환경에서는 예외를 다시 발생시킬 수도 있지만,
+        # 현재는 로그만 출력하고 계속 진행하도록 함
 
 
 _MEMORY_VERIFICATION_STORE = InMemoryPhoneVerificationStore()

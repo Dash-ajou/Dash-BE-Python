@@ -6,3 +6,4 @@ cryptography
 pydantic-settings
 fastapi-pagination
 gunicorn
+solapi

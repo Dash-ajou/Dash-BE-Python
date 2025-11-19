@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     
     # CORS 설정 (쉼표로 구분된 오리진 목록)
     ALLOWED_ORIGINS: str = ""  # 예: "http://localhost:3000,http://localhost:5173"
+    
+    # SOLAPI SMS 설정
+    SOLAPI_API_KEY: str = ""  # SOLAPI API Key
+    SOLAPI_API_SECRET: str = ""  # SOLAPI API Secret
+    SOLAPI_SENDER_NUMBER: str = ""  # 발신번호 (01000000000 형식, (-) 제외)
 
     class Config:
         # 루트 디렉터리의 .env 파일을 읽도록 경로 수정
