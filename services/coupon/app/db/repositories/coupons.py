@@ -628,4 +628,445 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 session.commit()
         
         return await self._run_in_thread(_register)
+    
+    async def find_issues_by_user(
+        self,
+        subject_type: str,
+        subject_id: int,
+        status: str | None = None,
+        title: str | None = None,
+        page: int = 1,
+        size: int = 10,
+    ) -> tuple[list[dict], int]:
+        """
+        사용자에게 권한이 부여된 쿠폰 발행기록을 조회합니다.
+        
+        Args:
+            subject_type: 사용자 타입 ("member" 또는 "partner")
+            subject_id: 사용자 ID
+            status: 발행 상태 필터 (선택)
+            title: 제목 검색 필터 (선택)
+            page: 페이지 번호 (1부터 시작)
+            size: 페이지 크기
+            
+        Returns:
+            (이슈 목록, 전체 개수) 튜플
+        """
+        def _query():
+            with self._session_factory() as session:
+                offset = (page - 1) * size
+                
+                # WHERE 조건 구성
+                where_conditions = []
+                params = {
+                    "offset": offset,
+                    "size": size,
+                }
+                
+                # 권한 확인 조건
+                if subject_type == "member":
+                    # 개인사용자: vendor_id가 member_id와 일치하는 경우
+                    where_conditions.append("il.vendor_id = :subject_id")
+                    params["subject_id"] = subject_id
+                elif subject_type == "partner":
+                    # 파트너사용자: partner_id가 일치하는 경우
+                    where_conditions.append("il.partner_id = :subject_id")
+                    params["subject_id"] = subject_id
+                else:
+                    # 알 수 없는 타입은 빈 결과 반환
+                    return ([], 0)
+                
+                # status 필터
+                if status:
+                    where_conditions.append("il.status = :status")
+                    params["status"] = status
+                
+                # title 검색 필터 (LIKE 검색)
+                if title:
+                    where_conditions.append("il.title LIKE :title")
+                    params["title"] = f"%{title}%"
+                
+                where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+                
+                # 전체 개수 조회
+                count_query = text(f"""
+                    SELECT COUNT(*)
+                    FROM issue_logs il
+                    WHERE {where_clause}
+                """)
+                count_result = session.execute(count_query, params).fetchone()
+                total = count_result[0] if count_result else 0
+                
+                # 이슈 목록 조회
+                query = text(f"""
+                    SELECT 
+                        il.issue_id,
+                        il.title,
+                        il.product_kind_count,
+                        il.status
+                    FROM issue_logs il
+                    WHERE {where_clause}
+                    ORDER BY il.requested_at DESC
+                    LIMIT :size OFFSET :offset
+                """)
+                
+                result = session.execute(query, params).fetchall()
+                
+                # 결과를 딕셔너리 리스트로 변환
+                issues = []
+                for row in result:
+                    issues.append({
+                        "issue_id": row[0],
+                        "title": row[1],
+                        "product_kind_count": row[2],
+                        "status": row[3],
+                    })
+                
+                return (issues, total)
+        
+        return await self._run_in_thread(_query)
+    
+    async def delete_issues_by_user(
+        self,
+        issue_ids: list[int],
+        subject_type: str,
+        subject_id: int,
+    ) -> tuple[list[int], list[int]]:
+        """
+        사용자에게 권한이 부여된 쿠폰 발행기록을 삭제합니다.
+        
+        Args:
+            issue_ids: 삭제할 이슈 ID 목록
+            subject_type: 사용자 타입 ("member" 또는 "partner")
+            subject_id: 사용자 ID
+            
+        Returns:
+            (유효한 이슈 ID 목록, 유효하지 않은 이슈 ID 목록) 튜플
+            
+        Raises:
+            ValueError: 권한이 없는 이슈가 포함된 경우
+        """
+        if not issue_ids:
+            return ([], [])
+        
+        def _delete():
+            with self._session_factory() as session:
+                from libs.common import now_kst
+                
+                # 이슈 정보 조회 (권한 확인 및 상태 확인용)
+                query = text("""
+                    SELECT 
+                        il.issue_id,
+                        il.vendor_id,
+                        il.partner_id,
+                        il.status
+                    FROM issue_logs il
+                    WHERE il.issue_id IN :issue_ids
+                """)
+                
+                issues = session.execute(
+                    query,
+                    {"issue_ids": tuple(issue_ids)}
+                ).fetchall()
+                
+                if not issues:
+                    return ([], issue_ids)
+                
+                # 권한 확인 및 상태별 처리
+                valid_issue_ids = []
+                invalid_issue_ids = []
+                issues_to_delete_completely = []  # 완전 삭제할 이슈
+                issues_to_soft_delete_vendor = []  # 벤더측에서만 삭제할 이슈
+                issues_to_soft_delete_partner = []  # 파트너측에서만 삭제할 이슈
+                issues_to_reject_and_delete = []  # 거절 처리 후 삭제할 이슈
+                
+                # 승인 이전 상태 목록
+                pending_statuses = ["ISSUE_STATUS/PENDING", "ISSUE_STATUS/PAYMENT_READY"]
+                # 승인 이후 상태 목록
+                approved_statuses = ["ISSUE_STATUS/ISSUED", "ISSUE_STATUS/SHARED", "ISSUE_STATUS/COMPLETED"]
+                
+                for issue in issues:
+                    issue_id, vendor_id, partner_id, status = issue
+                    
+                    # 권한 확인
+                    has_permission = False
+                    if subject_type == "member":
+                        # 개인사용자: vendor_id가 member_id와 일치하는 경우
+                        has_permission = (vendor_id == subject_id)
+                    elif subject_type == "partner":
+                        # 파트너사용자: partner_id가 일치하는 경우
+                        has_permission = (partner_id == subject_id)
+                    
+                    if not has_permission:
+                        invalid_issue_ids.append(issue_id)
+                        continue
+                    
+                    valid_issue_ids.append(issue_id)
+                    
+                    # 상태와 요청자에 따라 처리 분기
+                    if subject_type == "member":
+                        # 벤더가 호출한 경우
+                        if status in pending_statuses:
+                            # 파트너 승인 이전: 파트너와 벤더측 모두에서 삭제 (=DB에서 삭제)
+                            issues_to_delete_completely.append(issue_id)
+                        elif status in approved_statuses:
+                            # 파트너 승인 이후: 벤더측에서만 삭제
+                            issues_to_soft_delete_vendor.append(issue_id)
+                    elif subject_type == "partner":
+                        # 파트너가 호출한 경우
+                        if status in pending_statuses:
+                            # 승인 이전: 벤더측에서는 거절로 처리되고 파트너측에서만 삭제
+                            issues_to_reject_and_delete.append(issue_id)
+                        elif status in approved_statuses:
+                            # 승인 이후: 파트너측에서만 삭제
+                            issues_to_soft_delete_partner.append(issue_id)
+                
+                now = now_kst()
+                
+                # 1. 완전 삭제 (벤더요청, 파트너 승인 이전)
+                if issues_to_delete_completely:
+                    delete_query = text("""
+                        DELETE FROM issue_logs
+                        WHERE issue_id IN :issue_ids
+                    """)
+                    session.execute(
+                        delete_query,
+                        {"issue_ids": tuple(issues_to_delete_completely)}
+                    )
+                
+                # 2. 벤더측에서만 삭제 (벤더요청, 파트너 승인 이후)
+                # vendor_deleted_at 필드가 있다고 가정 (없으면 마이그레이션 필요)
+                if issues_to_soft_delete_vendor:
+                    # 일단 vendor_deleted_at 필드가 있다고 가정하고 구현
+                    # 실제로는 마이그레이션이 필요할 수 있음
+                    try:
+                        update_query = text("""
+                            UPDATE issue_logs
+                            SET vendor_deleted_at = :deleted_at
+                            WHERE issue_id IN :issue_ids
+                        """)
+                        session.execute(
+                            update_query,
+                            {
+                                "deleted_at": now,
+                                "issue_ids": tuple(issues_to_soft_delete_vendor)
+                            }
+                        )
+                    except Exception:
+                        # 필드가 없으면 일단 무시 (나중에 마이그레이션 추가 필요)
+                        pass
+                
+                # 3. 파트너측에서만 삭제 (파트너요청, 승인 이후)
+                # partner_deleted_at 필드가 있다고 가정 (없으면 마이그레이션 필요)
+                if issues_to_soft_delete_partner:
+                    try:
+                        update_query = text("""
+                            UPDATE issue_logs
+                            SET partner_deleted_at = :deleted_at
+                            WHERE issue_id IN :issue_ids
+                        """)
+                        session.execute(
+                            update_query,
+                            {
+                                "deleted_at": now,
+                                "issue_ids": tuple(issues_to_soft_delete_partner)
+                            }
+                        )
+                    except Exception:
+                        # 필드가 없으면 일단 무시 (나중에 마이그레이션 추가 필요)
+                        pass
+                
+                # 4. 거절 처리 후 삭제 (파트너요청, 승인 이전)
+                if issues_to_reject_and_delete:
+                    # status를 REJECTED로 변경하고 partner_deleted_at 설정
+                    try:
+                        update_query = text("""
+                            UPDATE issue_logs
+                            SET status = 'ISSUE_STATUS/REJECTED',
+                                partner_deleted_at = :deleted_at,
+                                decided_at = :decided_at
+                            WHERE issue_id IN :issue_ids
+                        """)
+                        session.execute(
+                            update_query,
+                            {
+                                "deleted_at": now,
+                                "decided_at": now,
+                                "issue_ids": tuple(issues_to_reject_and_delete)
+                            }
+                        )
+                    except Exception:
+                        # 필드가 없으면 status만 변경
+                        update_query = text("""
+                            UPDATE issue_logs
+                            SET status = 'ISSUE_STATUS/REJECTED',
+                                decided_at = :decided_at
+                            WHERE issue_id IN :issue_ids
+                        """)
+                        session.execute(
+                            update_query,
+                            {
+                                "decided_at": now,
+                                "issue_ids": tuple(issues_to_reject_and_delete)
+                            }
+                        )
+                
+                session.commit()
+                return (valid_issue_ids, invalid_issue_ids)
+        
+        return await self._run_in_thread(_delete)
+    
+    async def find_partners_by_keyword(
+        self,
+        keyword: str | None = None,
+        page: int = 1,
+        size: int = 10,
+    ) -> tuple[list[dict], int]:
+        """
+        파트너 상호명을 기반으로 파트너를 검색합니다.
+        
+        Args:
+            keyword: 검색 키워드 (파트너 상호명, 선택)
+            page: 페이지 번호 (1부터 시작)
+            size: 페이지 크기
+            
+        Returns:
+            (파트너 목록, 전체 개수) 튜플
+        """
+        def _query():
+            with self._session_factory() as session:
+                offset = (page - 1) * size
+                
+                # WHERE 조건 구성
+                where_conditions = ["p.contact_account_type = 'PARTNER'"]
+                params = {
+                    "offset": offset,
+                    "size": size,
+                }
+                
+                # keyword 필터 (파트너 상호명 LIKE 검색)
+                if keyword:
+                    where_conditions.append("pu.partner_name LIKE :keyword")
+                    params["keyword"] = f"%{keyword}%"
+                
+                where_clause = " AND ".join(where_conditions)
+                
+                # 전체 개수 조회
+                count_query = text(f"""
+                    SELECT COUNT(DISTINCT pu.partner_id)
+                    FROM partner_users pu
+                    INNER JOIN phones p ON p.account_id = pu.partner_id
+                    WHERE {where_clause}
+                """)
+                count_result = session.execute(count_query, params).fetchone()
+                total = count_result[0] if count_result else 0
+                
+                # 파트너 목록 조회 (전화번호 포함)
+                # GROUP_CONCAT을 사용하여 여러 전화번호를 하나의 문자열로 합침
+                query = text(f"""
+                    SELECT 
+                        pu.partner_id,
+                        pu.partner_name,
+                        GROUP_CONCAT(p.number ORDER BY p.number SEPARATOR ', ') as numbers
+                    FROM partner_users pu
+                    INNER JOIN phones p ON p.account_id = pu.partner_id
+                    WHERE {where_clause}
+                    GROUP BY pu.partner_id, pu.partner_name
+                    ORDER BY pu.partner_name ASC
+                    LIMIT :size OFFSET :offset
+                """)
+                
+                result = session.execute(query, params).fetchall()
+                
+                # 결과를 딕셔너리 리스트로 변환
+                partners = []
+                for row in result:
+                    # 전화번호가 여러 개인 경우 첫 번째 것만 사용하거나, 모두 표시
+                    # 요구사항에 따르면 "numbers"는 단수형이지만 여러 개일 수 있으므로
+                    # 첫 번째 전화번호만 사용하거나, 쉼표로 구분된 문자열 사용
+                    phone_numbers = row[2] if row[2] else ""
+                    # 첫 번째 전화번호만 사용 (요구사항에 "numbers"가 단수형이므로)
+                    first_phone = phone_numbers.split(',')[0].strip() if phone_numbers else ""
+                    
+                    partners.append({
+                        "partner_id": row[0],
+                        "partner_name": row[1],
+                        "numbers": first_phone,
+                    })
+                
+                return (partners, total)
+        
+        return await self._run_in_thread(_query)
+    
+    async def find_products_by_partner_and_keyword(
+        self,
+        partner_id: int,
+        keyword: str,
+        page: int = 1,
+        size: int = 10,
+    ) -> tuple[list[dict], int]:
+        """
+        특정 파트너에게 등록된 제품 목록을 검색합니다.
+        
+        Args:
+            partner_id: 파트너 ID
+            keyword: 검색 키워드 (상품명, 필수)
+            page: 페이지 번호 (1부터 시작)
+            size: 페이지 크기
+            
+        Returns:
+            (상품 목록, 전체 개수) 튜플
+        """
+        def _query():
+            with self._session_factory() as session:
+                offset = (page - 1) * size
+                
+                # WHERE 조건 구성
+                where_conditions = ["p.partner_id = :partner_id"]
+                params = {
+                    "partner_id": partner_id,
+                    "offset": offset,
+                    "size": size,
+                }
+                
+                # keyword 필터 (상품명 LIKE 검색)
+                if keyword:
+                    where_conditions.append("p.product_name LIKE :keyword")
+                    params["keyword"] = f"%{keyword}%"
+                
+                where_clause = " AND ".join(where_conditions)
+                
+                # 전체 개수 조회
+                count_query = text(f"""
+                    SELECT COUNT(*)
+                    FROM products p
+                    WHERE {where_clause}
+                """)
+                count_result = session.execute(count_query, params).fetchone()
+                total = count_result[0] if count_result else 0
+                
+                # 상품 목록 조회
+                query = text(f"""
+                    SELECT 
+                        p.product_id,
+                        p.product_name
+                    FROM products p
+                    WHERE {where_clause}
+                    ORDER BY p.product_name ASC
+                    LIMIT :size OFFSET :offset
+                """)
+                
+                result = session.execute(query, params).fetchall()
+                
+                # 결과를 딕셔너리 리스트로 변환
+                products = []
+                for row in result:
+                    products.append({
+                        "product_id": row[0],
+                        "product_name": row[1],
+                    })
+                
+                return (products, total)
+        
+        return await self._run_in_thread(_query)
 

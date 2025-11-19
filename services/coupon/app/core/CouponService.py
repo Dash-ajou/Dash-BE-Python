@@ -9,9 +9,15 @@ from services.coupon.app.schemas.response import (
     CouponAddResponse,
     CouponDetailResponse,
     CouponListItem,
+    IssueListItem,
+    IssueListResponse,
     PartnerInfo,
+    PartnerListItem,
+    PartnerListResponse,
     PaymentLogCouponInfo,
     PaymentLogItem,
+    ProductListItem,
+    ProductListResponse,
     RegisterInfo,
     RegisterLogInfo,
     UseLogInfo,
@@ -365,4 +371,172 @@ class CouponService:
             )
         
         return unused_coupons
+    
+    async def get_issues_by_user(
+        self,
+        subject_type: str,
+        subject_id: int,
+        status: str | None = None,
+        title: str | None = None,
+        page: int = 1,
+        size: int = 10,
+    ) -> IssueListResponse:
+        """
+        사용자에게 권한이 부여된 쿠폰 발행기록을 조회합니다.
+        
+        Args:
+            subject_type: 사용자 타입 ("member" 또는 "partner")
+            subject_id: 사용자 ID
+            status: 발행 상태 필터 (선택)
+            title: 제목 검색 필터 (선택)
+            page: 페이지 번호 (1부터 시작)
+            size: 페이지 크기
+            
+        Returns:
+            페이징된 이슈 목록
+        """
+        issues_data, total = await self.coupon_repository.find_issues_by_user(
+            subject_type=subject_type,
+            subject_id=subject_id,
+            status=status,
+            title=title,
+            page=page,
+            size=size,
+        )
+        
+        # 딕셔너리를 IssueListItem으로 변환
+        items = [
+            IssueListItem(
+                requestId=item["issue_id"],
+                title=item["title"],
+                productKindCount=item["product_kind_count"],
+                status=item["status"],
+            )
+            for item in issues_data
+        ]
+        
+        # IssueListResponse 생성
+        pages = (total + size - 1) // size if size > 0 else 0
+        return IssueListResponse(
+            items=items,
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+        )
+    
+    async def delete_issues_by_user(
+        self,
+        issue_ids: list[int],
+        subject_type: str,
+        subject_id: int,
+    ) -> None:
+        """
+        사용자에게 권한이 부여된 쿠폰 발행기록을 삭제합니다.
+        
+        Args:
+            issue_ids: 삭제할 이슈 ID 목록
+            subject_type: 사용자 타입 ("member" 또는 "partner")
+            subject_id: 사용자 ID
+            
+        Raises:
+            ValueError: 권한이 없는 이슈가 포함된 경우 ("ERR-NOT-YOURS")
+        """
+        valid_ids, invalid_ids = await self.coupon_repository.delete_issues_by_user(
+            issue_ids=issue_ids,
+            subject_type=subject_type,
+            subject_id=subject_id,
+        )
+        
+        if invalid_ids:
+            # 권한이 없는 이슈가 있는 경우
+            raise ValueError("ERR-NOT-YOURS")
+    
+    async def get_partners_by_keyword(
+        self,
+        keyword: str | None = None,
+        page: int = 1,
+        size: int = 10,
+    ) -> PartnerListResponse:
+        """
+        파트너 상호명을 기반으로 파트너를 검색합니다.
+        
+        Args:
+            keyword: 검색 키워드 (파트너 상호명, 선택)
+            page: 페이지 번호 (1부터 시작)
+            size: 페이지 크기
+            
+        Returns:
+            페이징된 파트너 목록
+        """
+        partners_data, total = await self.coupon_repository.find_partners_by_keyword(
+            keyword=keyword,
+            page=page,
+            size=size,
+        )
+        
+        # 딕셔너리를 PartnerListItem으로 변환
+        items = [
+            PartnerListItem(
+                partnerId=item["partner_id"],
+                partnerName=item["partner_name"],
+                numbers=item["numbers"],
+            )
+            for item in partners_data
+        ]
+        
+        # PartnerListResponse 생성
+        pages = (total + size - 1) // size if size > 0 else 0
+        return PartnerListResponse(
+            items=items,
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+        )
+    
+    async def get_products_by_partner_and_keyword(
+        self,
+        partner_id: int,
+        keyword: str,
+        page: int = 1,
+        size: int = 10,
+    ) -> ProductListResponse:
+        """
+        특정 파트너에게 등록된 제품 목록을 검색합니다.
+        
+        Args:
+            partner_id: 파트너 ID
+            keyword: 검색 키워드 (상품명, 필수)
+            page: 페이지 번호 (1부터 시작)
+            size: 페이지 크기
+            
+        Returns:
+            페이징된 상품 목록
+        """
+        products_data, total = await self.coupon_repository.find_products_by_partner_and_keyword(
+            partner_id=partner_id,
+            keyword=keyword,
+            page=page,
+            size=size,
+        )
+        
+        # 딕셔너리를 ProductListItem으로 변환
+        items = [
+            ProductListItem(
+                productId=item["product_id"],
+                productName=item["product_name"],
+            )
+            for item in products_data
+        ]
+        
+        # ProductListResponse 생성
+        pages = (total + size - 1) // size if size > 0 else 0
+        return ProductListResponse(
+            items=items,
+            total=total,
+            page=page,
+            size=size,
+            pages=pages,
+        )
 

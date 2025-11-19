@@ -11,6 +11,18 @@ from services.coupon.app.schemas.response.PaymentLogResponse import (
     PaymentLogCouponInfo,
     PaymentLogItem,
 )
+from services.coupon.app.schemas.response.IssueListResponse import (
+    IssueListItem,
+    IssueListResponse,
+)
+from services.coupon.app.schemas.response.PartnerListResponse import (
+    PartnerListItem,
+    PartnerListResponse,
+)
+from services.coupon.app.schemas.response.ProductListResponse import (
+    ProductListItem,
+    ProductListResponse,
+)
 
 __all__ = [
     "CouponAddResponse",
@@ -22,5 +34,11 @@ __all__ = [
     "UseLogInfo",
     "PaymentLogCouponInfo",
     "PaymentLogItem",
+    "IssueListItem",
+    "IssueListResponse",
+    "PartnerListItem",
+    "PartnerListResponse",
+    "ProductListItem",
+    "ProductListResponse",
 ]
 

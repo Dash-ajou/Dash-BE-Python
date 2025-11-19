@@ -50,7 +50,7 @@ app.add_middleware(
     allow_headers=["*"],  # 모든 헤더 허용
 )
 
-app.include_router(router, prefix="/api/v1")
+app.include_router(router)
 
 # 서비스가 살아있는지 확인하는 헬스 체크 엔드포인트
 @app.get("/")

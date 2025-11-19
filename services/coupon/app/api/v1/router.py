@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter
 
-# 메인 라우터 생성 (prefix 없음, main.py에서 /api/v1 prefix를 추가함)
+# 메인 라우터 생성 (prefix 없음)
 router = APIRouter(tags=["Coupon"])
 
 
