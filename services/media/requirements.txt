@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+sqlalchemy
+pymysql
+cryptography
+pydantic-settings
+fastapi-pagination
+gunicorn
+PyJWT
+python-multipart
+Pillow
+reportlab
+pandas
+openpyxl
+qrcode[pil]
+

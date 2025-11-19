@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: media-service
+  namespace: dash
+  labels:
+    app: media-service
+spec:
+  type: NodePort  # 호스트에서 접근 가능하도록 NodePort로 변경
+  ports:
+  - port: 80
+    targetPort: 8003
+    nodePort: 30003  # 호스트에서 접근할 포트 (30000-32767 범위)
+    protocol: TCP
+    name: http
+  selector:
+    app: media-service
+  # 세션 어피니티 (필요시)
+  # sessionAffinity: ClientIP
+  # sessionAffinityConfig:
+  #   clientIP:
+  #     timeoutSeconds: 10800
+

@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: media-config
+  namespace: dash
+data:
+  # 데이터베이스 URL (ConfigMap에 저장하되, 실제 운영에서는 Secret 사용 권장)
+  # 형식: mysql+pymysql://username:password@host:port/database
+  database-url: "mysql+pymysql://root:password@mysql-service:3306/dash_db"
+  
+  # 파일 저장소 설정
+  storage-path: "/home/appuser/storage"
+  max-file-size: "10485760"  # 10MB (바이트 단위)
+  allowed-extensions: "jpg,jpeg,png,gif,pdf,csv,xlsx,xls"
+  
+  # 환경 설정
+  environment: "production"
+  debug: "false"
+  
+  # 애플리케이션 설정
+  # 필요시 추가 설정 항목 추가
+

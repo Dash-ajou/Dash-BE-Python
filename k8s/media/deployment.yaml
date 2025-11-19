@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: media-service
+  namespace: dash
+  labels:
+    app: media-service
+    version: v1
+spec:
+  replicas: 3  # 프로덕션 환경에 맞게 조절
+  selector:
+    matchLabels:
+      app: media-service
+  template:
+    metadata:
+      labels:
+        app: media-service
+        version: v1
+    spec:
+      containers:
+      - name: media-service
+        image: your-registry/dash-media:latest  # 실제 이미지 레지스트리로 변경 필요
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8003
+          name: http
+          protocol: TCP
+        env:
+        - name: MEDIA_DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: media-config
+              key: database-url
+        - name: MEDIA_STORAGE_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: media-config
+              key: storage-path
+        - name: MEDIA_MAX_FILE_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: media-config
+              key: max-file-size
+        - name: MEDIA_ALLOWED_EXTENSIONS
+          valueFrom:
+            configMapKeyRef:
+              name: media-config
+              key: allowed-extensions
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: media-config
+              key: environment
+        - name: DEBUG
+          valueFrom:
+            configMapKeyRef:
+              name: media-config
+              key: debug
+        - name: PYTHONPATH
+          value: "/home/appuser"
+        envFrom:
+        - secretRef:
+            name: media-secrets  # 민감한 정보는 Secret으로 관리
+        resources:
+          requests:
+            memory: "512Mi"  # 파일 처리로 인해 메모리 요구량이 더 높음
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        volumeMounts:
+        - name: media-storage
+          mountPath: /home/appuser/storage
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8003
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8003
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        # Graceful shutdown을 위한 설정
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]
+      volumes:
+      - name: media-storage
+        persistentVolumeClaim:
+          claimName: media-storage-pvc  # PVC는 별도로 생성 필요
+      # Pod 안정성 설정
+      terminationGracePeriodSeconds: 30
+      # 이미지 풀 시크릿 (프라이빗 레지스트리 사용 시)
+      # imagePullSecrets:
+      # - name: registry-secret
+

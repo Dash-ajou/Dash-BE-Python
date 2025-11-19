@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: media-storage-pvc
+  namespace: dash
+  labels:
+    app: media-service
+spec:
+  accessModes:
+    - ReadWriteMany  # 여러 Pod에서 동시에 읽기/쓰기 가능
+  resources:
+    requests:
+      storage: 10Gi  # 저장소 크기 (필요에 따라 조절)
+  # storageClassName을 지정하지 않으면 기본 StorageClass 사용
+  # storageClassName: "standard"
+  # 특정 StorageClass 사용 시 위 주석을 해제하고 적절한 값으로 변경
+
