@@ -1224,14 +1224,19 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                             })
                 
                 # 3. IssueLog 생성
+                # 신규 파트너인 경우 partner_name도 저장
+                final_partner_name = None
+                if partner_is_new:
+                    final_partner_name = partner_name
+                
                 issue_query = text("""
                     INSERT INTO issue_logs (
                         title, product_kind_count, requested_issue_count, approved_issue_count,
-                        requested_at, valid_days, status, vendor_id, partner_id, partner_phone, created_at
+                        requested_at, valid_days, status, vendor_id, partner_id, partner_phone, partner_name, created_at
                     )
                     VALUES (
                         :title, :product_kind_count, :requested_issue_count, 0,
-                        :requested_at, :valid_days, 'ISSUE_STATUS/PENDING', :vendor_id, :partner_id, :partner_phone, :created_at
+                        :requested_at, :valid_days, 'ISSUE_STATUS/PENDING', :vendor_id, :partner_id, :partner_phone, :partner_name, :created_at
                     )
                 """)
                 result = session.execute(
@@ -1245,6 +1250,7 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                         "vendor_id": vendor_id,
                         "partner_id": final_partner_id,
                         "partner_phone": final_partner_phone,
+                        "partner_name": final_partner_name,
                         "created_at": now,
                     }
                 )
@@ -1357,4 +1363,372 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 session.commit()
         
         return await self._run_in_thread(_map)
+    
+    async def find_issue_request_by_id(
+        self,
+        issue_id: int,
+        subject_type: str,
+        subject_id: int,
+    ) -> dict | None:
+        """
+        발행기록의 발행요청서 정보를 조회합니다.
+        
+        Args:
+            issue_id: 발행기록 ID
+            subject_type: 사용자 타입 ("member" 또는 "partner")
+            subject_id: 사용자 ID
+            
+        Returns:
+            발행요청서 정보 딕셔너리 또는 None (권한 없음 또는 존재하지 않음)
+        """
+        def _query():
+            with self._session_factory() as session:
+                # 권한 확인 조건
+                permission_condition = ""
+                if subject_type == "member":
+                    permission_condition = "il.vendor_id = :subject_id AND il.vendor_deleted_at IS NULL"
+                elif subject_type == "partner":
+                    permission_condition = "il.partner_id = :subject_id AND il.partner_deleted_at IS NULL"
+                else:
+                    return None
+                
+                # 발행기록 기본 정보 조회 (권한 체크 포함)
+                query = text(f"""
+                    SELECT 
+                        il.issue_id,
+                        il.title,
+                        il.status,
+                        il.vendor_id,
+                        il.partner_id,
+                        il.partner_phone,
+                        il.partner_name,
+                        il.requested_at
+                    FROM issue_logs il
+                    WHERE il.issue_id = :issue_id
+                      AND {permission_condition}
+                """)
+                
+                result = session.execute(
+                    query,
+                    {
+                        "issue_id": issue_id,
+                        "subject_id": subject_id,
+                    }
+                ).fetchone()
+                
+                if not result:
+                    return None
+                
+                issue_id_val, title, status, vendor_id, partner_id, partner_phone, partner_name, requested_at = result
+                
+                # 벤더(회원) 정보 조회
+                vendor_query = text("""
+                    SELECT 
+                        m.member_id,
+                        m.member_name,
+                        (SELECT p.number 
+                         FROM phones p 
+                         WHERE p.contact_account_type = 'MEMBER' 
+                           AND p.account_id = m.member_id 
+                         LIMIT 1) as vendor_phone
+                    FROM members m
+                    WHERE m.member_id = :vendor_id
+                """)
+                
+                vendor_result = session.execute(
+                    vendor_query,
+                    {"vendor_id": vendor_id}
+                ).fetchone()
+                
+                if not vendor_result:
+                    return None
+                
+                vendor_member_id, vendor_member_name, vendor_phone = vendor_result
+                
+                # 파트너 정보 조회 (nullable)
+                partner_info = None
+                if partner_id:
+                    partner_query = text("""
+                        SELECT 
+                            pu.partner_id,
+                            pu.partner_name,
+                            (SELECT p.number 
+                             FROM phones p 
+                             WHERE p.contact_account_type = 'PARTNER' 
+                               AND p.account_id = pu.partner_id 
+                             ORDER BY p.phone_id
+                             LIMIT 1) as partner_phone
+                        FROM partner_users pu
+                        WHERE pu.partner_id = :partner_id
+                    """)
+                    
+                    partner_result = session.execute(
+                        partner_query,
+                        {"partner_id": partner_id}
+                    ).fetchone()
+                    
+                    if partner_result:
+                        partner_info = {
+                            "partner_id": partner_result[0],
+                            "partner_name": partner_result[1],
+                            "number": partner_result[2] if partner_result[2] else None,
+                        }
+                
+                # 파트너가 아직 가입하지 않은 경우 partner_phone과 partner_name 사용
+                if not partner_info and partner_phone:
+                    partner_info = {
+                        "partner_id": None,
+                        "partner_name": partner_name if partner_name else None,
+                        "number": partner_phone,
+                    }
+                
+                # 상품 목록 조회
+                products_query = text("""
+                    SELECT 
+                        ip.product_id,
+                        COALESCE(ip.product_name, p.product_name) as product_name,
+                        ip.count
+                    FROM issue_products ip
+                    LEFT JOIN products p ON ip.product_id = p.product_id
+                    WHERE ip.issue_id = :issue_id
+                      AND ip.stage = 'REQUEST'
+                    ORDER BY ip.issue_product_id
+                """)
+                
+                products_result = session.execute(
+                    products_query,
+                    {"issue_id": issue_id}
+                ).fetchall()
+                
+                products = []
+                for product_row in products_result:
+                    products.append({
+                        "product_id": product_row[0],
+                        "product_name": product_row[1],
+                        "count": product_row[2],
+                    })
+                
+                return {
+                    "issue_id": issue_id_val,
+                    "title": title,
+                    "status": status,
+                    "vendor": {
+                        "member_id": vendor_member_id,
+                        "member_name": vendor_member_name,
+                        "number": vendor_phone if vendor_phone else "",
+                    },
+                    "partner": partner_info or {
+                        "partner_id": None,
+                        "partner_name": None,
+                        "number": None,
+                    },
+                    "products": products,
+                    "requested_at": requested_at,
+                }
+        
+        return await self._run_in_thread(_query)
+    
+    async def find_issue_coupons_by_id(
+        self,
+        issue_id: int,
+        subject_type: str,
+        subject_id: int,
+    ) -> dict | None:
+        """
+        발행기록의 쿠폰 내역 또는 반려 정보를 조회합니다.
+        
+        Args:
+            issue_id: 발행기록 ID
+            subject_type: 사용자 타입 ("member" 또는 "partner")
+            subject_id: 사용자 ID
+            
+        Returns:
+            발행기록 정보 딕셔너리 또는 None (권한 없음 또는 존재하지 않음)
+            - status가 승인된 경우: issueInfo 포함
+            - status가 반려된 경우: rejectInfo 포함
+            - status가 미결정인 경우: None 반환 (406 처리용)
+        """
+        def _query():
+            with self._session_factory() as session:
+                # 권한 확인 조건
+                permission_condition = ""
+                if subject_type == "member":
+                    permission_condition = "il.vendor_id = :subject_id AND il.vendor_deleted_at IS NULL"
+                elif subject_type == "partner":
+                    permission_condition = "il.partner_id = :subject_id AND il.partner_deleted_at IS NULL"
+                else:
+                    return None
+                
+                # 발행기록 기본 정보 조회 (권한 체크 포함)
+                query = text(f"""
+                    SELECT 
+                        il.issue_id,
+                        il.status,
+                        il.requested_issue_count,
+                        il.approved_issue_count,
+                        il.valid_days,
+                        il.vendor_id,
+                        il.partner_id,
+                        il.partner_phone,
+                        il.partner_name,
+                        il.requested_at,
+                        il.decided_at
+                    FROM issue_logs il
+                    WHERE il.issue_id = :issue_id
+                      AND {permission_condition}
+                """)
+                
+                result = session.execute(
+                    query,
+                    {
+                        "issue_id": issue_id,
+                        "subject_id": subject_id,
+                    }
+                ).fetchone()
+                
+                if not result:
+                    return None
+                
+                (issue_id_val, status, requested_issue_count, approved_issue_count, 
+                 valid_days, vendor_id, partner_id, partner_phone, partner_name,
+                 requested_at, decided_at) = result
+                
+                # 상태 확인
+                approved_statuses = ["ISSUE_STATUS/ISSUED", "ISSUE_STATUS/SHARED", "ISSUE_STATUS/COMPLETED"]
+                rejected_status = "ISSUE_STATUS/REJECTED"
+                pending_statuses = ["ISSUE_STATUS/PENDING", "ISSUE_STATUS/PAYMENT_READY"]
+                
+                # 아직 결정되지 않은 경우
+                if status in pending_statuses:
+                    return {"status": "PENDING"}
+                
+                # 벤더(회원) 정보 조회
+                vendor_query = text("""
+                    SELECT 
+                        m.member_id,
+                        m.member_name,
+                        (SELECT p.number 
+                         FROM phones p 
+                         WHERE p.contact_account_type = 'MEMBER' 
+                           AND p.account_id = m.member_id 
+                         LIMIT 1) as vendor_phone
+                    FROM members m
+                    WHERE m.member_id = :vendor_id
+                """)
+                
+                vendor_result = session.execute(
+                    vendor_query,
+                    {"vendor_id": vendor_id}
+                ).fetchone()
+                
+                if not vendor_result:
+                    return None
+                
+                vendor_member_id, vendor_member_name, vendor_phone = vendor_result
+                
+                vendor_info = {
+                    "member_id": vendor_member_id,
+                    "member_name": vendor_member_name,
+                    "number": vendor_phone if vendor_phone else "",
+                }
+                
+                # 승인된 경우
+                if status in approved_statuses:
+                    # 파트너 정보 조회
+                    partner_info = None
+                    if partner_id:
+                        partner_query = text("""
+                            SELECT 
+                                pu.partner_id,
+                                pu.partner_name,
+                                (SELECT p.number 
+                                 FROM phones p 
+                                 WHERE p.contact_account_type = 'PARTNER' 
+                                   AND p.account_id = pu.partner_id 
+                                 ORDER BY p.phone_id
+                                 LIMIT 1) as partner_phone
+                            FROM partner_users pu
+                            WHERE pu.partner_id = :partner_id
+                        """)
+                        
+                        partner_result = session.execute(
+                            partner_query,
+                            {"partner_id": partner_id}
+                        ).fetchone()
+                        
+                        if partner_result:
+                            partner_info = {
+                                "partner_id": partner_result[0],
+                                "partner_name": partner_result[1],
+                                "number": partner_result[2] if partner_result[2] else None,
+                            }
+                    
+                    # 파트너가 아직 가입하지 않은 경우 partner_phone과 partner_name 사용
+                    if not partner_info and partner_phone:
+                        partner_info = {
+                            "partner_id": None,
+                            "partner_name": partner_name if partner_name else None,
+                            "number": partner_phone,
+                        }
+                    
+                    # 승인된 상품 목록 조회 (stage='APPROVE')
+                    products_query = text("""
+                        SELECT 
+                            ip.product_id,
+                            COALESCE(ip.product_name, p.product_name) as product_name,
+                            ip.count
+                        FROM issue_products ip
+                        LEFT JOIN products p ON ip.product_id = p.product_id
+                        WHERE ip.issue_id = :issue_id
+                          AND ip.stage = 'APPROVE'
+                        ORDER BY ip.issue_product_id
+                    """)
+                    
+                    products_result = session.execute(
+                        products_query,
+                        {"issue_id": issue_id}
+                    ).fetchall()
+                    
+                    products = []
+                    for product_row in products_result:
+                        products.append({
+                            "product_id": product_row[0],
+                            "product_name": product_row[1],
+                            "count": product_row[2],
+                        })
+                    
+                    return {
+                        "status": "APPROVED",
+                        "requested_issue_count": requested_issue_count,
+                        "approved_issue_count": approved_issue_count,
+                        "valid_days": valid_days,
+                        "vendor": vendor_info,
+                        "partner": partner_info or {
+                            "partner_id": None,
+                            "partner_name": None,
+                            "number": None,
+                        },
+                        "products": products,
+                        "requested_at": requested_at,
+                        "decided_at": decided_at,
+                    }
+                
+                # 반려된 경우
+                elif status == rejected_status:
+                    # 반려 사유는 DB에 저장되지 않으므로 기본 메시지 사용
+                    # TODO: 나중에 reason 필드가 추가되면 조회하도록 수정
+                    reason = "파트너에 의해 반려되었습니다."
+                    
+                    return {
+                        "status": "REJECTED",
+                        "requested_issue_count": requested_issue_count,
+                        "reason": reason,
+                        "requested_at": requested_at,
+                        "decided_at": decided_at,
+                    }
+                
+                # 알 수 없는 상태
+                return None
+        
+        return await self._run_in_thread(_query)
 

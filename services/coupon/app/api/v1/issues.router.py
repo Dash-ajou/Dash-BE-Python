@@ -8,7 +8,7 @@ from libs.common import CurrentUser
 from services.coupon.app.core.CouponService import CouponService
 from services.coupon.app.dependencies import get_coupon_service
 from services.coupon.app.schemas.request import IssueDeleteSchema, IssueRequestSchema
-from services.coupon.app.schemas.response import IssueListResponse
+from services.coupon.app.schemas.response import IssueCouponsResponse, IssueListResponse, IssueRequestResponse
 
 router = APIRouter(prefix="/issues", tags=["Issues"])
 
@@ -185,70 +185,119 @@ async def create_issue_request(
             )
 
 
-@router.get("/{issueId}/requests", status_code=status.HTTP_200_OK)
+@router.get("/{issueId}/requests", response_model=IssueRequestResponse, status_code=status.HTTP_200_OK)
 async def get_issue_requests(
     issueId: int,
     current_user: CurrentUser,
-    page: int = 1,
-    size: int = 10,
+    coupon_service: CouponService = Depends(get_coupon_service),
 ):
     """
-    특정 이슈의 요청 목록을 조회합니다.
+    발행기록에 대한 발행요청서 정보를 조회합니다.
     
     **Path Parameters:**
-    - `issueId`: 이슈 ID
+    - `issueId`: 조회하고자 하는 발행기록 ID
     
     **Headers:**
     - `Authorization`: Bearer {access_token} (필수)
     
-    **Query Parameters:**
-    - `page`: 페이지 번호 (기본값: 1)
-    - `size`: 페이지 크기 (기본값: 10)
-    
     **Response:**
-    - HTTP 200 OK: 요청 목록
-    - HTTP 401 Unauthorized: 인증 실패
+    - HTTP 200 OK: 발행요청서 정보 반환
+    - HTTP 400 Bad Request: 유효하지 않은 발행기록 ID `{"code": "ERR-IVD-VALUE"}`
+    - HTTP 401 Unauthorized: 인증 실패 (빈 응답)
+    
+    **권한 규칙:**
+    - 개인사용자: vendor_id가 member_id와 일치하는 경우
+    - 파트너사용자: partner_id가 일치하는 경우
+    
+    **특수 케이스:**
+    - 파트너가 아직 가입하지 않은 경우 `partnerId` 및 `productId`가 null로 반환될 수 있습니다.
     """
     subject_type, subject_id = current_user
     
-    # TODO: 실제 구현 필요
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="이 엔드포인트는 아직 구현되지 않았습니다.",
-    )
+    try:
+        # 발행요청서 정보 조회
+        result = await coupon_service.get_issue_request(
+            issue_id=issueId,
+            subject_type=subject_type,
+            subject_id=subject_id,
+        )
+        return result
+    except ValueError as e:
+        error_code = str(e)
+        if error_code == "ERR-IVD-VALUE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "ERR-IVD-VALUE"},
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": error_code},
+            )
 
 
-@router.get("/{issueId}/coupons", status_code=status.HTTP_200_OK)
+@router.get("/{issueId}/coupons", response_model=IssueCouponsResponse, status_code=status.HTTP_200_OK)
 async def get_issue_coupons(
     issueId: int,
     current_user: CurrentUser,
-    page: int = 1,
-    size: int = 10,
+    coupon_service: CouponService = Depends(get_coupon_service),
 ):
     """
-    특정 이슈의 쿠폰 목록을 조회합니다.
+    발행기록에 대한 쿠폰 내역이나 반려 정보를 조회합니다.
+    
+    발행이 승인된 경우 쿠폰 내역을, 반려된 경우 반려 정보를 응답합니다.
     
     **Path Parameters:**
-    - `issueId`: 이슈 ID
+    - `issueId`: 조회하고자 하는 발행기록 ID
     
     **Headers:**
     - `Authorization`: Bearer {access_token} (필수)
     
-    **Query Parameters:**
-    - `page`: 페이지 번호 (기본값: 1)
-    - `size`: 페이지 크기 (기본값: 10)
-    
     **Response:**
-    - HTTP 200 OK: 쿠폰 목록
-    - HTTP 401 Unauthorized: 인증 실패
+    - HTTP 200 OK: 쿠폰 내역 또는 반려 정보 반환
+    - HTTP 400 Bad Request: 유효하지 않은 발행기록 ID `{"code": "ERR-IVD-VALUE"}`
+    - HTTP 401 Unauthorized: 인증 실패 (빈 응답)
+    - HTTP 406 Not Acceptable: 아직 결정되지 않은 발행기록 (빈 응답)
+    
+    **권한 규칙:**
+    - 개인사용자: vendor_id가 member_id와 일치하는 경우
+    - 파트너사용자: partner_id가 일치하는 경우
+    
+    **상태별 응답:**
+    - 승인된 경우 (`ISSUE_STATUS/ISSUED`, `ISSUE_STATUS/SHARED`, `ISSUE_STATUS/COMPLETED`): 
+      `isApproved=true`, `issueInfo` 포함
+    - 반려된 경우 (`ISSUE_STATUS/REJECTED`): 
+      `isApproved=false`, `rejectInfo` 포함
+    - 아직 결정되지 않은 경우 (`ISSUE_STATUS/PENDING`, `ISSUE_STATUS/PAYMENT_READY`): 
+      HTTP 406 Not Acceptable
     """
     subject_type, subject_id = current_user
     
-    # TODO: 실제 구현 필요
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="이 엔드포인트는 아직 구현되지 않았습니다.",
-    )
+    try:
+        # 쿠폰 내역 또는 반려 정보 조회
+        result = await coupon_service.get_issue_coupons(
+            issue_id=issueId,
+            subject_type=subject_type,
+            subject_id=subject_id,
+        )
+        return result
+    except ValueError as e:
+        error_code = str(e)
+        if error_code == "ERR-IVD-VALUE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "ERR-IVD-VALUE"},
+            )
+        elif error_code == "ERR-NOT-DECIDED":
+            raise HTTPException(
+                status_code=status.HTTP_406_NOT_ACCEPTABLE,
+                detail="",
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": error_code},
+            )
 
 
 @router.get("/{issueId}/statistics", status_code=status.HTTP_200_OK)

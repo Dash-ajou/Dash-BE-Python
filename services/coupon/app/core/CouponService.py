@@ -9,18 +9,28 @@ from services.coupon.app.schemas.response import (
     CouponAddResponse,
     CouponDetailResponse,
     CouponListItem,
+    IssueCouponsResponse,
+    IssueInfo,
     IssueListItem,
     IssueListResponse,
+    IssueRequestResponse,
     PartnerInfo,
+    PartnerInfoInCoupons,
     PartnerListItem,
     PartnerListResponse,
     PaymentLogCouponInfo,
     PaymentLogItem,
+    ProductInfoInCoupons,
+    ProductInfoInRequest,
     ProductListItem,
     ProductListResponse,
+    RejectInfo,
     RegisterInfo,
     RegisterLogInfo,
     UseLogInfo,
+    VendorInfo,
+    VendorInfoInCoupons,
+    PartnerInfoInRequest,
 )
 
 
@@ -610,4 +620,169 @@ class CouponService:
             partner_phone=partner.get("partnerPhone"),
             products=products_data,
         )
+    
+    async def get_issue_request(
+        self,
+        issue_id: int,
+        subject_type: str,
+        subject_id: int,
+    ) -> IssueRequestResponse:
+        """
+        발행기록의 발행요청서 정보를 조회합니다.
+        
+        Args:
+            issue_id: 발행기록 ID
+            subject_type: 사용자 타입 ("member" 또는 "partner")
+            subject_id: 사용자 ID
+            
+        Returns:
+            발행요청서 정보
+            
+        Raises:
+            ValueError: 권한이 없거나 존재하지 않는 발행기록인 경우 ("ERR-IVD-VALUE")
+        """
+        from libs.common import ensure_kst
+        
+        issue_data = await self.coupon_repository.find_issue_request_by_id(
+            issue_id=issue_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+        )
+        
+        if not issue_data:
+            raise ValueError("ERR-IVD-VALUE")
+        
+        # 날짜 포맷팅 (YYYY.MM.DD HH:MM:SS)
+        requested_at = ensure_kst(issue_data["requested_at"])
+        requested_at_str = requested_at.strftime("%Y.%m.%d %H:%M:%S") if requested_at else ""
+        
+        # Response 객체 생성
+        return IssueRequestResponse(
+            issueId=issue_data["issue_id"],
+            title=issue_data["title"],
+            status=issue_data["status"],
+            vendor=VendorInfo(
+                memberId=issue_data["vendor"]["member_id"],
+                memberName=issue_data["vendor"]["member_name"],
+                number=issue_data["vendor"]["number"],
+            ),
+            partner=PartnerInfoInRequest(
+                partnerId=issue_data["partner"]["partner_id"],
+                partnerName=issue_data["partner"]["partner_name"],
+                number=issue_data["partner"]["number"],
+            ),
+            products=[
+                ProductInfoInRequest(
+                    productId=product["product_id"],
+                    productName=product["product_name"],
+                    count=product["count"],
+                )
+                for product in issue_data["products"]
+            ],
+            requestedAt=requested_at_str,
+        )
+    
+    async def get_issue_coupons(
+        self,
+        issue_id: int,
+        subject_type: str,
+        subject_id: int,
+    ) -> IssueCouponsResponse:
+        """
+        발행기록의 쿠폰 내역 또는 반려 정보를 조회합니다.
+        
+        Args:
+            issue_id: 발행기록 ID
+            subject_type: 사용자 타입 ("member" 또는 "partner")
+            subject_id: 사용자 ID
+            
+        Returns:
+            쿠폰 내역 또는 반려 정보
+            
+        Raises:
+            ValueError: 권한이 없거나 존재하지 않는 발행기록인 경우 ("ERR-IVD-VALUE")
+            ValueError: 아직 결정되지 않은 발행기록인 경우 ("ERR-NOT-DECIDED")
+        """
+        from datetime import timedelta
+        from libs.common import ensure_kst
+        
+        issue_data = await self.coupon_repository.find_issue_coupons_by_id(
+            issue_id=issue_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+        )
+        
+        if not issue_data:
+            raise ValueError("ERR-IVD-VALUE")
+        
+        # 아직 결정되지 않은 경우
+        if issue_data.get("status") == "PENDING":
+            raise ValueError("ERR-NOT-DECIDED")
+        
+        # 승인된 경우
+        if issue_data.get("status") == "APPROVED":
+            requested_at = ensure_kst(issue_data["requested_at"])
+            decided_at = ensure_kst(issue_data["decided_at"])
+            
+            # expiredAt 계산: decidedAt + validDays
+            expired_at = None
+            if decided_at:
+                expired_at = decided_at + timedelta(days=issue_data["valid_days"])
+            
+            requested_at_str = requested_at.strftime("%Y.%m.%d %H:%M:%S") if requested_at else ""
+            decided_at_str = decided_at.strftime("%Y.%m.%d %H:%M:%S") if decided_at else ""
+            expired_at_str = expired_at.strftime("%Y.%m.%d %H:%M:%S") if expired_at else ""
+            
+            return IssueCouponsResponse(
+                isApproved=True,
+                issueInfo=IssueInfo(
+                    requestedIssueCount=issue_data["requested_issue_count"],
+                    approvedIssueCount=issue_data["approved_issue_count"],
+                    validDays=issue_data["valid_days"],
+                    vendor=VendorInfoInCoupons(
+                        memberId=issue_data["vendor"]["member_id"],
+                        memberName=issue_data["vendor"]["member_name"],
+                        number=issue_data["vendor"]["number"],
+                    ),
+                    partner=PartnerInfoInCoupons(
+                        partnerId=issue_data["partner"]["partner_id"],
+                        partnerName=issue_data["partner"]["partner_name"],
+                        number=issue_data["partner"]["number"],
+                    ),
+                    products=[
+                        ProductInfoInCoupons(
+                            productId=product["product_id"],
+                            productName=product["product_name"],
+                            count=product["count"],
+                        )
+                        for product in issue_data["products"]
+                    ],
+                    requestedAt=requested_at_str,
+                    decidedAt=decided_at_str,
+                    expiredAt=expired_at_str,
+                ),
+                rejectInfo=None,
+            )
+        
+        # 반려된 경우
+        elif issue_data.get("status") == "REJECTED":
+            requested_at = ensure_kst(issue_data["requested_at"])
+            decided_at = ensure_kst(issue_data["decided_at"])
+            
+            requested_at_str = requested_at.strftime("%Y.%m.%d %H:%M:%S") if requested_at else ""
+            decided_at_str = decided_at.strftime("%Y.%m.%d %H:%M:%S") if decided_at else ""
+            
+            return IssueCouponsResponse(
+                isApproved=False,
+                issueInfo=None,
+                rejectInfo=RejectInfo(
+                    requestedIssueCount=issue_data["requested_issue_count"],
+                    reason=issue_data["reason"],
+                    requestedAt=requested_at_str,
+                    decidedAt=decided_at_str,
+                ),
+            )
+        
+        # 알 수 없는 상태
+        raise ValueError("ERR-IVD-VALUE")
 

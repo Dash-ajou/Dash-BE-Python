@@ -23,6 +23,20 @@ from services.coupon.app.schemas.response.ProductListResponse import (
     ProductListItem,
     ProductListResponse,
 )
+from services.coupon.app.schemas.response.IssueRequestResponse import (
+    IssueRequestResponse,
+    VendorInfo,
+    PartnerInfoInRequest,
+    ProductInfoInRequest,
+)
+from services.coupon.app.schemas.response.IssueCouponsResponse import (
+    IssueCouponsResponse,
+    IssueInfo,
+    RejectInfo,
+    VendorInfoInCoupons,
+    PartnerInfoInCoupons,
+    ProductInfoInCoupons,
+)
 
 __all__ = [
     "CouponAddResponse",
@@ -40,5 +54,15 @@ __all__ = [
     "PartnerListResponse",
     "ProductListItem",
     "ProductListResponse",
+    "IssueRequestResponse",
+    "VendorInfo",
+    "PartnerInfoInRequest",
+    "ProductInfoInRequest",
+    "IssueCouponsResponse",
+    "IssueInfo",
+    "RejectInfo",
+    "VendorInfoInCoupons",
+    "PartnerInfoInCoupons",
+    "ProductInfoInCoupons",
 ]
 
