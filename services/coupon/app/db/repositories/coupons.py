@@ -1479,7 +1479,7 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                     WHERE il.issue_id = :issue_id
                       AND {permission_condition}
                 """)
-                
+
                 result = session.execute(
                     query,
                     {
@@ -1487,36 +1487,12 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                         "subject_id": subject_id,
                     }
                 ).fetchone()
-                
+
                 if not result:
-                    return None
-                
+                    return None;
+
                 issue_id_val, title, status, vendor_id, partner_id, partner_phone, partner_name, requested_at = result
-                
-                # 벤더(회원) 정보 조회
-                vendor_query = text("""
-                    SELECT 
-                        m.member_id,
-                        m.member_name,
-                        (SELECT p.number 
-                         FROM phones p 
-                         WHERE p.contact_account_type = 'MEMBER' 
-                           AND p.account_id = m.member_id 
-                         LIMIT 1) as vendor_phone
-                    FROM members m
-                    WHERE m.member_id = :vendor_id
-                """)
-                
-                vendor_result = session.execute(
-                    vendor_query,
-                    {"vendor_id": vendor_id}
-                ).fetchone()
-                
-                if not vendor_result:
-                    return None
-                
-                vendor_member_id, vendor_member_name, vendor_phone = vendor_result
-                
+
                 # 파트너 정보 조회 (nullable)
                 partner_info = None
                 if partner_id:
@@ -1579,6 +1555,46 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                         "product_name": product_row[1],
                         "count": product_row[2],
                     })
+                
+                # 벤더(회원) 정보 조회
+                vendor_query = text("""
+                    SELECT 
+                        m.member_id,
+                        m.member_name,
+                        (SELECT p.number 
+                         FROM phones p 
+                         WHERE p.contact_account_type = 'MEMBER' 
+                           AND p.account_id = m.member_id 
+                         LIMIT 1) as vendor_phone
+                    FROM members m
+                    WHERE m.member_id = :vendor_id
+                """)
+                
+                vendor_result = session.execute(
+                    vendor_query,
+                    {"vendor_id": vendor_id}
+                ).fetchone()
+                
+                if not vendor_result:
+                    return {
+                        "issue_id": issue_id_val,
+                        "title": title,
+                        "status": status,
+                        "vendor": {
+                            "member_id": 1,
+                            "member_name": "",
+                            "number": ""
+                        },
+                        "partner": partner_info or {
+                            "partner_id": None,
+                            "partner_name": None,
+                            "number": None,
+                        },
+                        "products": products,
+                        "requested_at": requested_at,
+                    }
+                
+                vendor_member_id, vendor_member_name, vendor_phone = vendor_result
                 
                 return {
                     "issue_id": issue_id_val,
@@ -1675,35 +1691,42 @@ class SQLAlchemyCouponRepository(_SQLRepositoryBase):
                 if status in pending_statuses:
                     return {"status": "PENDING"}
                 
-                # 벤더(회원) 정보 조회
-                vendor_query = text("""
-                    SELECT 
-                        m.member_id,
-                        m.member_name,
-                        (SELECT p.number 
-                         FROM phones p 
-                         WHERE p.contact_account_type = 'MEMBER' 
-                           AND p.account_id = m.member_id 
-                         LIMIT 1) as vendor_phone
-                    FROM members m
-                    WHERE m.member_id = :vendor_id
-                """)
-                
-                vendor_result = session.execute(
-                    vendor_query,
-                    {"vendor_id": vendor_id}
-                ).fetchone()
-                
-                if not vendor_result:
-                    return None
-                
-                vendor_member_id, vendor_member_name, vendor_phone = vendor_result
-                
-                vendor_info = {
-                    "member_id": vendor_member_id,
-                    "member_name": vendor_member_name,
-                    "number": vendor_phone if vendor_phone else "",
-                }
+                if vendor_id is not None:
+                    # 벤더(회원) 정보 조회
+                    vendor_query = text("""
+                        SELECT 
+                            m.member_id,
+                            m.member_name,
+                            (SELECT p.number 
+                            FROM phones p 
+                            WHERE p.contact_account_type = 'MEMBER' 
+                            AND p.account_id = m.member_id 
+                            LIMIT 1) as vendor_phone
+                        FROM members m
+                        WHERE m.member_id = :vendor_id
+                    """)
+                    
+                    vendor_result = session.execute(
+                        vendor_query,
+                        {"vendor_id": vendor_id}
+                    ).fetchone()
+                    
+                    if not vendor_result:
+                        return None
+                    
+                    vendor_member_id, vendor_member_name, vendor_phone = vendor_result
+                    
+                    vendor_info = {
+                        "member_id": vendor_member_id,
+                        "member_name": vendor_member_name,
+                        "number": vendor_phone if vendor_phone else "",
+                    }
+                else:
+                    vendor_info = {
+                        "member_id": -1,
+                        "member_name": "",
+                        "number": "",
+                    }
                 
                 # 승인된 경우
                 if status in approved_statuses:

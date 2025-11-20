@@ -650,6 +650,9 @@ class CouponService:
             subject_type=subject_type,
             subject_id=subject_id,
         )
+
+        print(issue_id, subject_type, subject_id)
+        print(issue_data)
         
         if not issue_data:
             raise ValueError("ERR-IVD-VALUE")
